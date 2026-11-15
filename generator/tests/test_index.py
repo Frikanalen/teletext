@@ -69,30 +69,6 @@ class ScheduleTest(unittest.TestCase):
 DUSK = sky.look(T("2026-11-15T15:35:00+01:00"))
 
 
-class TickerTest(unittest.TestCase):
-    def test_programmes_after_the_next_one(self):
-        from datetime import timedelta
-
-        from teletext_pages.index import ticker
-        from teletext_pages.schedule import Programme, later
-
-        start = T("2026-11-15T18:00:00+01:00")
-        items = [
-            Programme(start + timedelta(hours=n), start + timedelta(hours=n + 1), f"Program {n}")
-            for n in range(5)
-        ]
-        after = later(items, start + timedelta(minutes=5), count=2)
-        self.assertEqual([p.title for p in after], ["Program 2", "Program 3"])
-        (t,) = ticker(CFG, after)
-        self.assertEqual(t["row"], 22)
-        self.assertEqual(t["text"], "{yellow}20:00{white}Program 2 {yellow}21:00{white}Program 3 ")
-        self.assertEqual(ticker(CFG, []), [])
-        self.assertEqual(ticker(IndexConfig(ticker=False), after), [])
-        # The page itself leaves the ticker's row empty.
-        rows = render(CFG, None, None, [], sky.look(start))
-        self.assertEqual(rows[21].strip(), "")
-
-
 class IndexTest(unittest.TestCase):
     def test_directory_lists_live_and_always(self):
         shown = [e.page for e in directory(CFG, {"100", "200"})]

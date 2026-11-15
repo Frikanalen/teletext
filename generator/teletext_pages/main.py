@@ -277,9 +277,6 @@ class IndexGenerator:
             out.append((self.cfg.info_page, self.info_pages()))
         return out
 
-    def tickers(self, at: datetime) -> list[dict]:
-        return index.ticker(self.cfg.index, schedule.later(self.items, at))
-
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)
         change = schedule.next_change(self.items, at)
@@ -362,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
             drcs.push(tuple(logo().drcs_subpages()))
             gen.share_assets()
         page, animation = gen.animated_page(now)
-        pusher.push(page, gen.tickers(now), animation)
+        pusher.push(page, animation=animation)
         for cfg_page, subpages in gen.more_pages(now):
             more[cfg_page.page].push(subpages)
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
