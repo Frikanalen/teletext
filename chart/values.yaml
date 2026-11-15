@@ -58,9 +58,41 @@ persistence:
   size: 1Gi
   storageClass: ""
 
-# The studio page generator (ttx-pages), next to ttxd.
+# The studio page generator (ttx-pages), next to ttxd. It writes as the publisher
+# named in `publisher` (its token comes from the same Secret as ttxd's).
 pages:
   enabled: false
+  image:
+    repository: ghcr.io/frikanalen/ttx-pages
+    # Defaults to v<chart version>.
+    tag: ""
+    pullPolicy: IfNotPresent
+  publisher: pages
+  # django-api's schedule. In the cluster that is the API Service, not the site.
+  apiUrl: http://django-api.default.svc.cluster.local:8080/api
+  pollSecs: 30
+  refreshSecs: 120
+  ttlSecs: 600
+  index:
+    page: "100"
+    tagline: Sivilsamfunnets kanal
+    web: frikanalen.tv
+    level25: true
+    drcsPage: "10F"
+    # Listed on the index while ttxd is sending the page, or always with always: true.
+    # The first four also go on the colour keys.
+    entries:
+      - page: "200"
+        title: Sendeplan
+      - page: "888"
+        title: Teksting
+        always: true
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
 
 resources:
   requests:

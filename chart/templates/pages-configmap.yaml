@@ -1,0 +1,32 @@
+{{- if .Values.pages.enabled }}
+{{- $p := .Values.pages }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ttx-pages
+  labels:
+    {{- include "teletext.labels" . | nindent 4 }}
+data:
+  pages.toml: |
+    ttxd_url = "http://ttxd:{{ .Values.service.port }}"
+    api_url = {{ $p.apiUrl | quote }}
+    poll_secs = {{ $p.pollSecs | int }}
+    refresh_secs = {{ $p.refreshSecs | int }}
+    ttl_secs = {{ $p.ttlSecs | int }}
+
+    [index]
+    page = {{ $p.index.page | quote }}
+    tagline = {{ $p.index.tagline | quote }}
+    footer = {{ $p.index.web | quote }}
+    level25 = {{ $p.index.level25 }}
+    drcs_page = {{ $p.index.drcsPage | quote }}
+    {{- range $p.index.entries }}
+
+    [[index.entry]]
+    page = {{ .page | quote }}
+    title = {{ .title | quote }}
+    {{- if .always }}
+    always = true
+    {{- end }}
+    {{- end }}
+{{- end }}
