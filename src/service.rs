@@ -41,6 +41,10 @@ pub struct StoredPage {
     pub animation: Option<crate::motion::Animation>,
     #[serde(skip)]
     motion: crate::motion::MotionState,
+    /// The DRCS page this page's own characters are on. ttxd lists it in the
+    /// magazine's MOT, which is how a decoder finds it.
+    #[serde(default)]
+    pub drcs_page: Option<PageNo>,
     #[serde(skip)]
     last_sent: Option<SystemTime>,
     #[serde(skip)]
@@ -68,6 +72,7 @@ impl StoredPage {
             tickers: vec![],
             animation: None,
             motion: Default::default(),
+            drcs_page: None,
             last_sent: None,
             sub_idx: 0,
             sub_since: None,
@@ -277,14 +282,17 @@ impl Service {
         self.rebuild_assets()
     }
 
-    fn asset_mags(&self) -> Vec<u8> {
-        let mut mags: Vec<u8> = self
-            .pages
-            .iter()
-            .filter(|(_, p)| p.owner != TTXD_OWNER)
-            .map(|(no, _)| no.mag)
-            .collect();
-        mags.dedup();
+    /// What the MOTs are built from: per magazine with pages, each page's link to a
+    /// DRCS page of its own (page number, DRCS page, that page's subpage count).
+    fn mot_inputs(&self) -> BTreeMap<u8, Vec<(u8, PageNo, u8)>> {
+        let mut mags: BTreeMap<u8, Vec<(u8, PageNo, u8)>> = BTreeMap::new();
+        for (no, p) in self.pages.iter().filter(|(_, p)| p.owner != TTXD_OWNER) {
+            let links = mags.entry(no.mag).or_default();
+            if let Some(drcs) = p.drcs_page {
+                let subpages = self.pages.get(&drcs).map_or(0, |d| d.subpages.len());
+                links.push((no.num, drcs, subpages.min(15) as u8));
+            }
+        }
         mags
     }
 
@@ -299,12 +307,15 @@ impl Service {
             self.pages.remove(no);
         }
         let mut new: Vec<(PageNo, Content, u32)> = vec![];
-        if !self.assets.is_empty() {
-            let mags = self.asset_mags();
-            for m in mags {
-                let mot = self.assets.mot(self.gpop_page, self.gdrcs_page);
+        // A magazine gets a MOT when there are shared assets to point at, or when one
+        // of its pages has a DRCS page of its own.
+        for (m, links) in self.mot_inputs() {
+            if !self.assets.is_empty() || !links.is_empty() {
+                let mot = self.assets.mot(self.gpop_page, self.gdrcs_page, &links);
                 new.push((PageNo::new(m, 0xFE), mot, MOT_REPEAT_SECS));
             }
+        }
+        if !self.assets.is_empty() {
             if let Some(c) = self.assets.gpop() {
                 new.push((self.gpop_page, c, GLOBAL_REPEAT_SECS));
             }
@@ -343,9 +354,9 @@ impl Service {
 
     /// Store a page (replacing it). With `flash`, also send it ahead of the carousel.
     pub fn put_page(&mut self, no: PageNo, page: StoredPage, flash: bool) {
-        let mags = self.asset_mags();
+        let before = self.mot_inputs();
         self.put_page_only(no, page, flash);
-        if !self.assets.is_empty() && self.asset_mags() != mags {
+        if self.mot_inputs() != before {
             self.rebuild_assets();
         }
     }
@@ -373,9 +384,9 @@ impl Service {
     pub fn delete_page(&mut self, no: PageNo) -> Option<StoredPage> {
         self.dirty = true;
         self.flashes.retain(|u| u.page != no);
-        let mags = self.asset_mags();
+        let before = self.mot_inputs();
         let gone = self.pages.remove(&no);
-        if !self.assets.is_empty() && self.asset_mags() != mags {
+        if self.mot_inputs() != before {
             self.rebuild_assets();
         }
         gone
@@ -875,6 +886,28 @@ mod tests {
         }
         assert!(s.stats.carousel_packets > 0);
         assert!(s.stats.flash_packets <= 30 + 200);
+    }
+
+    #[test]
+    fn a_page_with_its_own_drcs_page_gets_a_mot() {
+        let now = SystemTime::now();
+        let mut s = Service::new("X", BTreeMap::new());
+        let page = |drcs: Option<&str>| {
+            let mut p = StoredPage::new("t", vec![Content::default()], 10, None, now);
+            p.drcs_page = drcs.map(|d| d.parse().unwrap());
+            p
+        };
+        let mot: PageNo = "1FE".parse().unwrap();
+        s.put_page("100".parse().unwrap(), page(None), false);
+        assert!(!s.pages.contains_key(&mot));
+        s.put_page("100".parse().unwrap(), page(Some("10F")), false);
+        let link = |s: &Service| s.pages[&mot].subpages[0].coded[&21][4..8].to_vec();
+        let first = link(&s);
+        // The DRCS page arriving changes the link's subpage count.
+        s.put_page("10F".parse().unwrap(), page(None), false);
+        assert_ne!(link(&s), first);
+        s.delete_page("100".parse().unwrap());
+        assert!(!s.pages.contains_key(&mot));
     }
 
     #[test]

@@ -84,6 +84,7 @@ first.
 | `ttl_secs` | none | the page leaves the carousel this long after the PUT. It stays in the store, and `GET /pages` shows `"expired": true` |
 | `flash` | false | send subpage 1 at once, ahead of the carousel, instead of waiting for its turn |
 | `repeat_secs` | none | send the page at most once per this many seconds in the carousel. Meant for hidden data pages (DRCS, objects) that rarely change, so they don't take a full share of the ~10 pages/s |
+| `drcs_page` | none | the page (same magazine or another) that holds this page's own DRCS characters, such as `"10F"`. ttxd lists it in the magazine's Magazine Organisation Table (`mFE`), which is where decoders look for it; up to 7 different DRCS pages per magazine. Without it, DRCS triplets (`mode` 13 with bit 6 of the data set) find nothing |
 | `flags` | none | header bits: `{"inhibit_display": true}` (C10) for pages that hold data rather than text, such as DRCS pages; `{"suppress_header": true}` (C7) |
 
 A PUT replaces the whole page, so it is idempotent: sending the same page again does
@@ -293,7 +294,9 @@ To use them from a page's `x26`:
 
 ttxd builds three kinds of hidden page from the assets and sends them in the carousel:
 the Magazine Organisation Table (page `mFE` of each magazine that has pages, every 5 s,
-carrying the M/29/0 palette and links to the global pages), the global object page
+carrying the M/29/0 palette, links to the global pages and each page's link to its own
+`drcs_page`; it is also sent, without shared assets, for a magazine where a page has a
+`drcs_page`), the global object page
 (`8E8`) and the global DRCS page (`8E9`), each every 10 s. These page numbers, and `xFD`
 to `xFF` of every magazine, are reserved: a PUT to them gives `403`. Change the global
 page numbers with `gpop_page` and `gdrcs_page` in the config. A decoder that has just

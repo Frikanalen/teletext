@@ -187,6 +187,8 @@ struct PutPage {
     tickers: Vec<crate::motion::Ticker>,
     /// Rows that step through frames, driven by ttxd.
     animation: Option<crate::motion::Animation>,
+    /// The DRCS page with this page's own characters, for the magazine's MOT.
+    drcs_page: Option<PageNo>,
 }
 
 /// A subpage: a list of markup rows (first entry = row 1), or an object that can also
@@ -320,6 +322,7 @@ async fn put_page(
     }
     stored.tickers = body.tickers;
     stored.animation = body.animation;
+    stored.drcs_page = body.drcs_page;
     let mut svc = st.svc.lock().unwrap();
     svc.put_page(no, stored, body.flash);
     st.feed.page(&svc, no);

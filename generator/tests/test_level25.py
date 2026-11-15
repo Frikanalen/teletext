@@ -4,7 +4,7 @@ from datetime import datetime
 
 from teletext_pages import level25 as L
 from teletext_pages import sky
-from teletext_pages.index import MAX_TRIPLETS, Entry, IndexConfig, logo, page
+from teletext_pages.index import MAX_TRIPLETS, Entry, IndexConfig, assets, logo, page
 from teletext_pages.schedule import OSLO
 
 
@@ -45,16 +45,6 @@ class PacketTest(unittest.TestCase):
         f = unpack(L.x28_drcs(), [4, 3, 11] + [4] * 48)
         self.assertEqual(f[0], 5)  # normal DRCS page
         self.assertEqual(set(f[3:]), {0})  # all 12x10x1
-
-    def test_drcs_link(self):
-        f = unpack(L.x27_drcs_link("10F"), [18] * 8)
-        pages = [f[2 * i] for i in range(4)]
-        for slot, word in enumerate(pages):
-            self.assertEqual(word & 3, slot)  # link function
-        # POP (1) and DRCS (3) slots point at page x0F, the others at xFF.
-        self.assertEqual([(w >> 7) & 0xFF for w in pages], [0xFF, 0x0F, 0xFF, 0x0F])
-        with self.assertRaises(ValueError):
-            L.x27_drcs_link("12F")
 
     def test_tile_bytes(self):
         bits = [[x == 0 or x == 11 for x in range(12)] for _ in range(10)]
@@ -113,22 +103,58 @@ class IndexLogoTest(unittest.TestCase):
         cfg = IndexConfig(entries=[Entry(str(n), "Side") for n in (200, 300, 400, 888)])
         skies = [sky.Weather(c, rain=r, snow=s, thunder=r) for c in (0, 2, 3) for r, s in WET]
         skies.append(sky.Weather(1, fog=True))
+        shared = {
+            "objects": {"logo": [56, 18, 0]},
+            "glyphs": {g["name"]: n for n, g in enumerate(assets()["glyphs"])},
+        }
         for hour in (3, 9, 15):
             for weather in skies:
                 at = sky.look(datetime(2026, 11, 15, hour, 20, tzinfo=OSLO), weather)
-                p = page(cfg, None, None, cfg.entries, at)
-                # Room left for ttxd's Æ/Ø substitutions (16 packets of 13, less a
-                # terminator).
-                self.assertLessEqual(len(p["x26"]), MAX_TRIPLETS, (hour, weather))
-                self.assertEqual([k["packet"] for k in p["packets"]], [27, 27, 28])
-                # Rows and columns in rising order, as a decoder reads them.
-                position = (0, -1)
-                for address, _, _ in p["x26"]:
-                    if address >= 40:
-                        position = (24 if address == 40 else address - 40, -1)
-                    else:
-                        self.assertGreaterEqual(address, position[1])
-                        position = (position[0], address)
+                for held in (None, shared):
+                    p = page(cfg, None, None, cfg.entries, at, held)
+                    # Room left for ttxd's Æ/Ø substitutions (16 packets of 13, less
+                    # a terminator).
+                    self.assertLessEqual(len(p["x26"]), MAX_TRIPLETS, (hour, weather))
+                    self.assertEqual([k["packet"] for k in p["packets"]], [27, 28])
+                    # Rows and columns in rising order, as a decoder reads them.
+                    position = (0, -1)
+                    for address, mode, _ in p["x26"]:
+                        if address >= 40 and mode != 0x12:
+                            position = (24 if address == 40 else address - 40, -1)
+                        elif address < 40:
+                            self.assertGreaterEqual(address, position[1])
+                            position = (position[0], address)
+
+    def test_shared_logo_and_glyphs(self):
+        cfg = IndexConfig(entries=[Entry(str(n), "Side") for n in (200, 300, 400, 888)])
+        glyphs = {g["name"]: n for n, g in enumerate(assets()["glyphs"])}
+        shared = {"objects": {"logo": [56, 18, 0]}, "glyphs": glyphs}
+        night = sky.look(datetime(2026, 11, 15, 3, 0, tzinfo=OSLO))
+        own = page(cfg, None, None, cfg.entries, night)["x26"]
+        x26 = page(cfg, None, None, cfg.entries, night, shared)["x26"]
+        # The logo is placed, not carried: the active position, then the object.
+        at = x26.index((56, 0x12, 0))
+        self.assertEqual(x26[at - 1], (48, 0x04, 2))
+        self.assertLess(len(x26), len(own) - 80)
+        # No characters from the page's own DRCS page are left; stars and the slanted
+        # ends of the tabs and chips come from the shared glyphs.
+        drawn = [d for _, mode, d in x26 if mode == 0x0D]
+        self.assertTrue(all(d < 0x40 for d in drawn))
+        stars = {glyphs[f"star-{n}"] for n in range(3)}
+        self.assertGreater(sum(d in stars for d in drawn), 5)
+        slants = {n for name, n in glyphs.items() if name.startswith("slant")}
+        self.assertEqual(sum(d in slants for d in drawn), 2 + 2 * 4)  # tabs, chip ends
+
+    def test_logo_as_an_object(self):
+        g = logo()
+        obj = g.object_x26()
+        # Same cells as on the page, counted from the logo's top left corner.
+        self.assertEqual(sum(mode == 0x0D for _, mode, _ in obj), len(g.cells))
+        self.assertEqual(obj[0][1], 0x18)  # the DRCS subpage of the first row
+        self.assertIn((41, 0x04, 0), obj)
+        self.assertTrue(all(a < 40 or 40 <= a <= 44 for a, _, _ in obj))
+        for part in assets()["glyphs"]:
+            self.assertEqual([len(r) for r in part["rows"]], [12] * 10, part["name"])
 
     def test_sky_and_keys(self):
         cfg = IndexConfig(entries=[Entry("200", "Sendeplan")])

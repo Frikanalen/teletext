@@ -199,20 +199,23 @@ def _cloud(pic: Picture, cx: int, cy: int, size: float, colour: int) -> tuple[in
     return round(cx - 10 * size), round(cx + 11 * size), base
 
 
-def draw(pic: Picture, at: Look) -> None:
-    """Paint the sky into the top :data:`ROWS` rows of ``pic``."""
+def draw(pic: Picture, at: Look) -> dict[tuple[int, int], str]:
+    """Paint the sky into the top :data:`ROWS` rows of ``pic``. Returns the sixels
+    (x, y) that are a lone ``"star"``, a ``"rain"`` drop or a ``"snow"`` flake, which
+    a Level 2.5 page can draw as something finer than a block."""
     w = at.weather
     dark = at.elevation < -6
-    if w.clouds < 3 and not w.fog:
-        if at.elevation < -3:
-            for x, y in STARS:
-                _put(pic, x, y, WHITE)
-        if dark:
-            _moon(pic, at)
+    stars = w.clouds < 3 and not w.fog and at.elevation < -3
+    if stars:
+        for x, y in STARS:
+            _put(pic, x, y, WHITE)
+    if dark and w.clouds < 3 and not w.fog:
+        _moon(pic, at)
     _sun(pic, at)
     spans = []
     for cx, cy, size in CLOUDS[: CLOUDS_SHOWN[w.clouds]]:
         spans.append(_cloud(pic, cx, cy, size, BLUE if dark else WHITE))
+    small: dict[tuple[int, int], str] = {}
     # Rain and snow fall through open sky under each cloud, not across what is there.
     for x0, x1, base in spans:
         for y in range(base + 1, HORIZON - 1):
@@ -221,8 +224,10 @@ def draw(pic: Picture, at: Look) -> None:
                     continue
                 if w.rain and (x + y) % 5 == 0 and y % 3 != 2:
                     pic.sixels[y][x] = CYAN
+                    small[(x, y)] = "rain"
                 elif w.snow and (x * 37 + y * 101 + x * y * 7) % 13 == 0:
                     pic.sixels[y][x] = WHITE
+                    small[(x, y)] = "snow"
     if w.thunder and spans:
         x0, x1, base = spans[0]
         x = (x0 + x1) // 2
@@ -230,13 +235,27 @@ def draw(pic: Picture, at: Look) -> None:
             dx = (3, 2, 1, 0, 3, 2, 1, 0, -1, 2, 1, 0)[dy % 12]
             for n in range(3):
                 _put(pic, x + dx + n, base + 1 + dy, YELLOW)
+                small.pop((x + dx + n, base + 1 + dy), None)
     if w.fog:
         for n, y in enumerate((13, 16, 19)):
             for x in range(LEFT, RIGHT):
                 if (x + n * 7) % 16 < 11:
                     _put(pic, x, y, WHITE)
+                    small.pop((x, y), None)
     for x in range(LEFT, RIGHT):
         pic.sixels[HORIZON][x] = CYAN
+    if stars:
+        # A star still counts if nothing was drawn over or right beside it.
+        for x, y in STARS:
+            around = [
+                pic.sixels[y + dy][x + dx]
+                for dy in (-1, 0, 1)
+                for dx in (-1, 0, 1)
+                if (dx or dy) and 0 <= y + dy < HORIZON and 0 <= x + dx < len(pic.sixels[0])
+            ]
+            if pic.sixels[y][x] == WHITE and all(c == BLACK for c in around):
+                small[(x, y)] = "star"
+    return small
 
 
 # --- Level 2.5 colours -----------------------------------------------------------

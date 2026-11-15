@@ -48,6 +48,7 @@ class Ttxd:
         flash: bool = False,
         flags: dict | None = None,
         repeat_secs: int | None = None,
+        drcs_page: str | None = None,
     ) -> None:
         """Each subpage is a list of markup rows, or a dict with ``rows`` and any of
         ``raw_rows``, ``x26`` and ``packets`` (Level 2.5 data, see docs/api.md)."""
@@ -61,7 +62,16 @@ class Ttxd:
             body["flags"] = flags
         if repeat_secs:
             body["repeat_secs"] = repeat_secs
+        if drcs_page:
+            # ttxd lists it in the magazine's MOT, where decoders look for it.
+            body["drcs_page"] = drcs_page
         self._call("PUT", f"/v1/pages/{page}", body)
+
+    def put_assets(self, assets: dict) -> dict:
+        """Replace the shared Level 2.5 assets. Returns where they ended up: under
+        ``objects`` each name's placing triplet, under ``glyphs`` each name's
+        character number (docs/api.md)."""
+        return self._call("PUT", "/v1/assets", assets)
 
     def flash_rows(self, page: str, rows: dict[int, str], subpage: int = 0) -> None:
         body = {"rows": {str(n): text for n, text in rows.items()}, "subpage": subpage}
