@@ -17,6 +17,11 @@ config:
   gpopPage: "8E8"
   gdrcsPage: "8E9"
 
+# Return-path monitor: ttxd reads the broadcast transport stream and checks the
+# teletext in it (GET /v1/status, "monitor"). Empty turns it off.
+monitor:
+  url: http://simula.frikanalen.tv:9094/frikanalen.ts
+
 # Publishers and the pages they may write. Each token comes from key `tokenKey` of
 # the Secret named in `tokens.secretName`.
 publishers:

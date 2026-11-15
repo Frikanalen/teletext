@@ -17,6 +17,11 @@ data:
     network_id = {{ .Values.config.networkId | int }}
     gpop_page = {{ .Values.config.gpopPage | quote }}
     gdrcs_page = {{ .Values.config.gdrcsPage | quote }}
+    {{- with .Values.monitor.url }}
+
+    [monitor]
+    url = {{ . | quote }}
+    {{- end }}
     {{- range .Values.publishers }}
 
     [[publisher]]
