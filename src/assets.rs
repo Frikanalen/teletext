@@ -28,6 +28,8 @@ pub const GLYPH_H: usize = 10;
 pub const MAX_GLYPHS: usize = 48;
 /// Objects of each type one GPOP subpage can point to through its first pointer packet.
 pub const MAX_OBJECTS_PER_TYPE: usize = 8;
+/// DRCS pages of their own that the display pages of one magazine can link to.
+pub const MOT_DRCS_LINKS: usize = 7;
 /// GPOP triplet space: packets 3..=24, 13 triplets each.
 pub const GPOP_TRIPLETS: usize = 22 * 13;
 /// Charset code sent in M/29/0: Latin G0, Swedish/Finnish/Hungarian national option
@@ -333,17 +335,42 @@ impl Assets {
         Some(c)
     }
 
-    /// The MOT page of a magazine: no per-page links (rows 1-14 all 0), and the global
-    /// links to the GPOP and GDRCS pages. With `m29`, also the magazine's M/29/0.
-    pub fn mot(&self, gpop: PageNo, gdrcs: PageNo) -> Content {
+    /// The MOT page of a magazine: the global links to the GPOP and GDRCS pages, and
+    /// for each display page in `page_drcs` (page number in the magazine, its own DRCS
+    /// page) a link to that DRCS page. With a palette, also the magazine's M/29/0.
+    ///
+    /// Rows 1-14 hold two digits per page, an object link and a DRCS link index;
+    /// row 21 holds the DRCS links, 0 the global one and 1-7 the pages' own.
+    pub fn mot(&self, gpop: PageNo, gdrcs: PageNo, page_drcs: &[(u8, PageNo, u8)]) -> Content {
         let mut c = Content::default();
         if let Some(m29) = self.m29() {
             c.extra.push((29, 0, m29));
         }
-        for row in 1..=14 {
-            c.coded.insert(row, vec![ham84(0); COLS]);
-        }
+        let mut rows = vec![vec![0u8; COLS]; 15];
         let none = PageNo::new(8, 0xFF);
+        let mut drcs: Vec<(PageNo, u8)> = vec![];
+        for &(num, target, subpages) in page_drcs {
+            let known = drcs.iter().position(|(p, _)| *p == target);
+            let index = match known {
+                Some(i) => i,
+                None if drcs.len() < MOT_DRCS_LINKS => {
+                    drcs.push((target, subpages));
+                    drcs.len() - 1
+                }
+                None => continue,
+            };
+            let (tens, unit) = ((num >> 4) as usize, (num & 15) as usize);
+            let (row, at) = if unit < 10 {
+                (tens / 2 + 1, (tens % 2 * 10 + unit) * 2)
+            } else {
+                (9 + tens / 3, (tens % 3 * 6 + unit - 10) * 2)
+            };
+            rows[row][at + 1] = index as u8 + 1;
+        }
+        for (row, digits) in rows.into_iter().enumerate().skip(1) {
+            c.coded
+                .insert(row as u8, digits.into_iter().map(ham84).collect());
+        }
         let link = |p: PageNo| [p.mag & 7, p.num >> 4, p.num & 15];
         let mut r19 = vec![];
         for i in 0..4 {
@@ -359,13 +386,13 @@ impl Assets {
         c.coded.insert(19, r19.into_iter().map(ham84).collect());
         let mut r21 = vec![];
         for i in 0..8 {
-            let p = if i == 0 && !self.glyphs.is_empty() {
-                gdrcs
-            } else {
-                none
+            let (p, subpages) = match i {
+                0 if !self.glyphs.is_empty() => (gdrcs, 0),
+                0 => (none, 0),
+                _ => drcs.get(i - 1).copied().unwrap_or((none, 0)),
             };
             r21.extend(link(p));
-            r21.push(0);
+            r21.push(subpages.min(15));
         }
         r21.resize(COLS, 0);
         c.coded.insert(21, r21.into_iter().map(ham84).collect());
@@ -499,12 +526,33 @@ mod tests {
             }],
             ..Default::default()
         };
-        let mot = a.mot(PageNo::new(8, 0xE8), PageNo::new(8, 0xE9));
+        let mot = a.mot(PageNo::new(8, 0xE8), PageNo::new(8, 0xE9), &[]);
         let n = |row: u8, i: usize| unham84(mot.coded[&row][i]).unwrap();
         assert_eq!((n(19, 0), n(19, 1), n(19, 2)), (0, 0xE, 8));
         assert_eq!((n(19, 10), n(19, 11), n(19, 12)), (0, 0xF, 0xF));
         assert_eq!((n(21, 0), n(21, 1), n(21, 2)), (0, 0xE, 9));
         assert_eq!(n(1, 0), 0);
         assert!(mot.extra.is_empty());
+    }
+
+    #[test]
+    fn mot_links_pages_to_their_own_drcs_page() {
+        let drcs = PageNo::new(1, 0x0F);
+        let pages = [
+            (0x00, drcs, 3),
+            (0x2B, drcs, 3),
+            (0x35, PageNo::new(1, 0x1F), 1),
+        ];
+        let mot = Assets::default().mot(PageNo::new(8, 0xE8), PageNo::new(8, 0xE9), &pages);
+        let n = |row: u8, i: usize| unham84(mot.coded[&row][i]).unwrap();
+        // Page x00: row 1, first pair. x2B: row 9, third group. x35: row 2, second half.
+        assert_eq!((n(1, 0), n(1, 1)), (0, 1));
+        assert_eq!(n(9, (2 * 6 + 1) * 2 + 1), 1);
+        assert_eq!(n(2, (10 + 5) * 2 + 1), 2);
+        assert_eq!(n(1, 3), 0);
+        // Row 21: no global DRCS, then the two pages with their subpage counts.
+        assert_eq!((n(21, 1), n(21, 2)), (0xF, 0xF));
+        assert_eq!((n(21, 4), n(21, 5), n(21, 6), n(21, 7)), (1, 0, 0xF, 3));
+        assert_eq!((n(21, 8), n(21, 9), n(21, 10), n(21, 11)), (1, 1, 0xF, 1));
     }
 }

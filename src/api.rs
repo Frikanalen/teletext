@@ -141,6 +141,8 @@ struct PutPage {
     flags: PageFlags,
     /// Send at most once per this many seconds (for data pages such as DRCS).
     repeat_secs: Option<u32>,
+    /// The DRCS page with this page's own characters, for the magazine's MOT.
+    drcs_page: Option<PageNo>,
 }
 
 /// A subpage: a list of markup rows (first entry = row 1), or an object that can also
@@ -266,6 +268,7 @@ async fn put_page(
     );
     stored.flags = body.flags;
     stored.repeat_secs = body.repeat_secs;
+    stored.drcs_page = body.drcs_page;
     let mut svc = st.svc.lock().unwrap();
     svc.put_page(no, stored, body.flash);
     st.feed.page(&svc, no);
