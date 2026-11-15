@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/Frikanalen/teletext/compare/v0.4.0...v0.5.0) (2026-11-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* ttxd's decklink_device, vanc_line and op47_lines options are gone; they move to ttx-inject.toml.
+
+### Features
+
+* OP-47 ANC Multipacket output for encoders in multi-packet mode ([#32](https://github.com/Frikanalen/teletext/issues/32)) ([387b735](https://github.com/Frikanalen/teletext/commit/387b73521706053dcbefb451aafd4081524dba52))
+
 ## [0.4.0](https://github.com/Frikanalen/teletext/compare/v0.3.0...v0.4.0) (2026-11-15)
 
 
