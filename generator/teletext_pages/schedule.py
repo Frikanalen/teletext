@@ -50,11 +50,23 @@ def next_change(items: list[Programme], at: datetime) -> datetime | None:
     return min(times, default=None)
 
 
-def fetch(api: str, timeout: float = 10) -> list[Programme]:
+def fetch(api: str, timeout: float = 5, attempts: int = 2) -> list[Programme]:
     """Today's schedule plus the items either side, so a programme that started
-    yesterday and the first one tomorrow are included."""
+    yesterday and the first one tomorrow are included. A failed request is tried again
+    right away, ``attempts`` times in all."""
+    for attempt in range(attempts):
+        try:
+            return _fetch(api, timeout)
+        except (OSError, ValueError, KeyError, TypeError):
+            if attempt == attempts - 1:
+                raise
+    return []
+
+
+def _fetch(api: str, timeout: float) -> list[Programme]:
     query = urllib.parse.urlencode({"date": "today", "days": 1, "surrounding": "true"})
-    url = f"{api.rstrip('/')}/scheduleitems/?{query}"
+    # No trailing slash: frikanalen.tv answers /api/scheduleitems/ with 404.
+    url = f"{api.rstrip('/')}/scheduleitems?{query}"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = json.load(resp)
