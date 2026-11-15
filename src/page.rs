@@ -147,6 +147,13 @@ impl Content {
         triplets: Option<&[Triplet]>,
         raw: Option<&[u8]>,
     ) -> Result<(), String> {
+        if let Some(&(a, m, d)) = triplets
+            .unwrap_or_default()
+            .iter()
+            .find(|&&(a, m, d)| a > 63 || m > 31 || d > 127)
+        {
+            return Err(format!("bad triplet ({a}, {m}, {d})"));
+        }
         let bytes = match (triplets, raw) {
             (Some(t), None) if t.len() <= 13 => {
                 let mut b = Vec::with_capacity(39);
@@ -357,10 +364,11 @@ fn row_address(row: u8) -> u8 {
 /// row (row address triplets with mode 0x01, 0x04 or 0x07); each G2 character goes into
 /// its row's group in column order, and a row with no group gets one.
 pub fn merge_x26(publisher: &[Triplet], subs: &[(u8, u8, u8)]) -> Vec<Triplet> {
-    // (row, triplets); the first group holds what comes before any row is addressed.
-    let mut groups: Vec<(Option<u8>, Vec<Triplet>)> = vec![(None, vec![])];
+    // (row, starting column, triplets); the first group holds what comes before any row
+    // is addressed. "Set active position" (mode 0x04) can start a group mid-row.
+    let mut groups: Vec<(Option<u8>, u8, Vec<Triplet>)> = vec![(None, 0, vec![])];
     for &t in publisher {
-        let (a, m, _) = t;
+        let (a, m, d) = t;
         if a == 63 && m == 0x1F {
             break; // termination marker
         }
@@ -373,24 +381,29 @@ pub fn merge_x26(publisher: &[Triplet], subs: &[(u8, u8, u8)]) -> Vec<Triplet> {
             } else {
                 a - 40
             };
-            groups.push((Some(row), vec![t]));
+            let col = if m == 0x04 && d < 40 { d } else { 0 };
+            groups.push((Some(row), col, vec![t]));
         } else {
-            groups.last_mut().unwrap().1.push(t);
+            groups.last_mut().unwrap().2.push(t);
         }
     }
     for &(row, col, code) in subs {
-        let idx = match groups.iter().rposition(|(r, _)| *r == Some(row)) {
+        // The last group of this row that starts at or before this column.
+        let idx = match groups
+            .iter()
+            .rposition(|&(r, c, _)| r == Some(row) && c <= col)
+        {
             Some(i) => i,
             None => {
                 let at = groups
                     .iter()
-                    .position(|(r, _)| r.is_some_and(|r| r > row))
+                    .position(|&(r, c, _)| r.is_some_and(|r| r > row || (r == row && c > col)))
                     .unwrap_or(groups.len());
-                groups.insert(at, (Some(row), vec![(row_address(row), 0x04, 0)]));
+                groups.insert(at, (Some(row), 0, vec![(row_address(row), 0x04, 0)]));
                 at
             }
         };
-        let g = &mut groups[idx].1;
+        let g = &mut groups[idx].2;
         // After the row triplets and any column triplet at or before this column.
         let at = g
             .iter()
@@ -398,7 +411,7 @@ pub fn merge_x26(publisher: &[Triplet], subs: &[(u8, u8, u8)]) -> Vec<Triplet> {
             .map_or(0, |i| i + 1);
         g.insert(at, (col, 0x0F, code)); // mode 0x0F: character from G2
     }
-    groups.into_iter().flat_map(|(_, g)| g).collect()
+    groups.into_iter().flat_map(|(_, _, g)| g).collect()
 }
 
 /// Build X/26 enhancement packets from triplets (a termination marker is added).
@@ -546,6 +559,22 @@ mod tests {
                 (7, 0x0F, 0x79),
                 (40, 0x04, 0),
                 (0, 0x0F, 0x71),
+            ]
+        );
+    }
+
+    #[test]
+    fn g2_before_a_mid_row_active_position_gets_its_own_row_triplet() {
+        // The publisher starts row 2 at column 20; an Æ at column 3 must come first.
+        let publisher = [(42, 0x04, 20), (25, 0x0D, 0x40)];
+        assert_eq!(
+            merge_x26(&publisher, &[(2, 3, 0x61), (2, 30, 0x69)]),
+            vec![
+                (42, 0x04, 0),
+                (3, 0x0F, 0x61),
+                (42, 0x04, 20),
+                (25, 0x0D, 0x40),
+                (30, 0x0F, 0x69),
             ]
         );
     }

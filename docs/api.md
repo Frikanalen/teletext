@@ -82,6 +82,7 @@ first.
 | `cycle_secs` | 10 | how long each subpage stays up (minimum 1) |
 | `ttl_secs` | none | the page leaves the carousel this long after the PUT. It stays in the store, and `GET /pages` shows `"expired": true` |
 | `flash` | false | send subpage 1 at once, ahead of the carousel, instead of waiting for its turn |
+| `repeat_secs` | none | send the page at most once per this many seconds in the carousel. Meant for hidden data pages (DRCS, objects) that rarely change, so they don't take a full share of the ~10 pages/s |
 | `flags` | none | header bits: `{"inhibit_display": true}` (C10) for pages that hold data rather than text, such as DRCS pages; `{"suppress_header": true}` (C7) |
 
 A PUT replaces the whole page, so it is idempotent: sending the same page again does
