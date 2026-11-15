@@ -123,6 +123,10 @@ class IndexConfig:
     latitude: float = 59.91
     longitude: float = 10.75
     weather: bool = True
+    # Aim the view of the sky at the most there is to see. Without this it is always
+    # to the south. ``sky_label`` says which way it looks, in the middle of the top row.
+    sky_follows: bool = True
+    sky_label: bool = False
 
 
 def _stamp(pic: Picture, x: int, y: int, art: list[str], colour: int) -> None:
@@ -224,6 +228,9 @@ def _picture(
     small = sky.draw(pic, at)
     pic.text(0, 1, fit(plain(cfg.footer), 16), WHITE)
     pic.text(0, COLS - 9, "TEKST-TV", CYAN)
+    if cfg.sky_label and (at.heading != sky.SOUTH or at.elevation < sky.NIGHT_BELOW):
+        # The view is aimed: say which way it looks.
+        pic.text(0, 22 - len(at.direction) // 2, at.direction, CYAN)
     _logo(pic, cfg.tagline)
     # A Level 2.5 decoder draws the real logo over these rows, and only replaces
     # characters: the block logo must not lean on background colours.
@@ -334,7 +341,7 @@ SMALL_GLYPHS = {
         "............",
     ],
 }
-SMALL_COLOURS = {"star": WHITE, "rain": CYAN, "snow": WHITE}
+SMALL_COLOURS = {"rain": CYAN, "snow": WHITE}
 # The same things as sprites: a small flake and a short streak at three heights in
 # the cell, so that they fall a few pixels a step and then move on to the cell below.
 FLAKE = ["....#.#.....", ".....#......", "...#####....", ".....#......", "....#.#....."]
@@ -354,7 +361,13 @@ for _i, _top in enumerate((0, 3, 6)):
 # cell below. Rain takes two heights a frame. A star is mostly bright.
 SPRITE_FRAMES = 6
 FALL_SPEED = {"snow": 1, "rain": 2}
-TWINKLE = [0, 0, 0, 1, 2, 1]
+# The glyph a star shows in each frame, by how bright it is. A planet shines steadily.
+TWINKLE = {
+    "star-0": ["star-0", "star-0", "star-0", "star-1", "star-0", "star-0"],
+    "star-1": ["star-1", "star-1", "star-0", "star-1", "star-1", "star-2"],
+    "star-2": ["star-2", "star-2", "star-2", "star-1", "star-2", "star-2"],
+    "planet": ["star-0"] * 6,
+}
 
 
 @dataclass(frozen=True)
@@ -413,7 +426,7 @@ def _finer(
             if len(kinds) != 1 or None in kinds:
                 continue
             (kind,) = kinds
-            if fg == SMALL_COLOURS[kind]:
+            if fg == SMALL_COLOURS.get(kind, fg):  # a star has its own colour
                 found.append((row, col, kind, lit[0][0] * 7 + lit[0][1] * 3))
     sprites: dict[int, list[Sprite]] = {}
     for row, col, kind, seed in found:
@@ -440,10 +453,14 @@ def _sky_frame(
             out.setdefault(row, []).append((col, 0x0D, glyphs[name]))
 
     for s in (s for group in sprites.values() for s in group):
-        if frame is None:
-            put(s.row, s.col, f"star-{s.seed % 3}" if s.kind == "star" else s.kind)
-        elif s.kind == "star":
-            put(s.row, s.col, f"star-{TWINKLE[(frame + s.seed) % SPRITE_FRAMES]}")
+        if s.kind in TWINKLE:
+            put(
+                s.row,
+                s.col,
+                TWINKLE[s.kind][0 if frame is None else (frame + s.seed) % SPRITE_FRAMES],
+            )
+        elif frame is None:
+            put(s.row, s.col, s.kind)
         else:
             step = ((frame + s.seed) * FALL_SPEED[s.kind]) % SPRITE_FRAMES
             if step < 3 or not s.falls:

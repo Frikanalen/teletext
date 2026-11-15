@@ -6,9 +6,11 @@ sends If-Modified-Since after that.
 """
 
 import json
+import math
 import time
 import urllib.error
 import urllib.request
+from dataclasses import replace
 
 from .sky import Weather, weather_from_symbol
 
@@ -20,10 +22,28 @@ STALE_SECS = 3 * 3600
 
 
 def parse(body: dict) -> Weather:
-    """The weather for the coming hour from a Locationforecast reply."""
+    """The weather for the coming hour from a Locationforecast reply: the symbol,
+    and where MET gives them the cloud cover, the wind and how much it rains."""
     now = body["properties"]["timeseries"][0]["data"]
     period = now.get("next_1_hours") or now.get("next_6_hours") or {}
-    return weather_from_symbol(period["summary"]["symbol_code"])
+    weather = weather_from_symbol(period["summary"]["symbol_code"])
+    details = (now.get("instant") or {}).get("details") or {}
+    more = {}
+    try:
+        if weather.clouds and "cloud_area_fraction" in details:
+            # At least the one cloud the symbol promises, at most all six.
+            more["cover"] = max(1, round(float(details["cloud_area_fraction"]) / 100 * 6))
+        if "wind_speed" in details and "wind_from_direction" in details:
+            # The picture looks south, so west is on the right: a wind from the
+            # west blows the clouds to the left.
+            along = math.sin(math.radians(float(details["wind_from_direction"])))
+            more["wind"] = round(float(details["wind_speed"]) * along)
+        amount = (period.get("details") or {}).get("precipitation_amount")
+        if amount is not None and "next_1_hours" in now:
+            more["intensity"] = 0 if float(amount) < 0.5 else (1 if float(amount) < 2.5 else 2)
+    except (TypeError, ValueError):
+        return weather
+    return replace(weather, **more)
 
 
 class Forecast:
