@@ -147,6 +147,17 @@ class Picture:
     def height(self) -> int:
         return len(self.pixels)
 
+    @classmethod
+    def blank(cls, width: int, height: int) -> "Picture":
+        return cls([[None] * width for _ in range(height)])
+
+    def paste(self, other: "Picture", x: int, y: int) -> None:
+        """Copy ``other``'s pixels (not its background) with its corner at (x, y)."""
+        for dy, row in enumerate(other.pixels):
+            for dx, c in enumerate(row):
+                if c is not None:
+                    self.pixels[y + dy][x + dx] = c
+
 
 def read_ppm(path: str, background: RGB, threshold: int = 150) -> Picture:
     """Read a binary PPM (P6). Pixels within ``threshold`` (sum of channel
@@ -230,7 +241,7 @@ class Graphic:
             if (row, col) not in self.cells:
                 extra.setdefault(row, []).append((col, 0x09, 0x20))  # G0 character
         out: list[Triplet] = []
-        subpage = 0
+        subcode = 0
         for row in sorted({r for r, _ in self.cells} | set(extra)):
             out.append((row_address(row), 0x04, 0))  # set active position: row
             subpages = {
@@ -238,10 +249,13 @@ class Graphic:
             }
             if len(subpages) > 1:
                 raise ValueError(f"row {row} uses tiles from DRCS subpages {sorted(subpages)}")
-            if subpages and subpages != {subpage}:
-                (subpage,) = subpages
+            # ttxd numbers subpages 1, 2, ... when there are several, and the DRCS mode
+            # triplet names the DRCS subpage by that number.
+            several = len(self.tiles) > TILES_PER_DRCS_SUBPAGE
+            if subpages and {s + several for s in subpages} != {subcode}:
+                (subcode,) = {s + several for s in subpages}
                 # DRCS mode: normal DRCS (bit 6) from this subpage on.
-                out.append((row_address(row), 0x18, 0x40 | subpage))
+                out.append((row_address(row), 0x18, 0x40 | subcode))
             colour = None
             pending = sorted(extra.get(row, []))
             for col in sorted(c for r, c in self.cells if r == row):
@@ -283,9 +297,9 @@ def make_graphic(
     is from the background (so soft edges don't drag a colour towards it). Empty cells
     are left alone; identical tiles are shared."""
     g = Graphic()
-    index: dict[tuple[int, ...], int] = {}
     rows = -(-pic.height // TILE_H)
     cols = -(-pic.width // TILE_W)
+    found: dict[tuple[int, int], tuple[tuple[int, ...], int]] = {}
     for cy in range(rows):
         for cx in range(cols):
             bits = [[False] * TILE_W for _ in range(TILE_H)]
@@ -303,13 +317,38 @@ def make_graphic(
                         weight += w
             if not weight:
                 continue
-            tile = tile_bytes(bits)
-            if tile not in index:
-                index[tile] = len(g.tiles)
-                g.tiles.append(tile)
             mean = (total[0] // weight, total[1] // weight, total[2] // weight)
-            g.cells[(top_row + cy, left_col + cx)] = (
-                index[tile],
-                first_index + nearest(mean, palette),
-            )
+            found[(cy, cx)] = (tile_bytes(bits), first_index + nearest(mean, palette))
+    # A row can only use tiles from one DRCS subpage, so fill subpages row by row.
+    index: dict[tuple[int, ...], int] = {}
+    for cy in range(rows):
+        new = list(
+            dict.fromkeys(t for (r, _), (t, _) in found.items() if r == cy and t not in index)
+        )
+        if len(new) > TILES_PER_DRCS_SUBPAGE:
+            raise ValueError(f"row {top_row + cy} needs {len(new)} tiles")
+        used = sorted(
+            {
+                index[t] // TILES_PER_DRCS_SUBPAGE
+                for (r, _), (t, _) in found.items()
+                if r == cy and t in index
+            }
+        )
+        room = TILES_PER_DRCS_SUBPAGE - len(g.tiles) % TILES_PER_DRCS_SUBPAGE
+        current = len(g.tiles) // TILES_PER_DRCS_SUBPAGE
+        if (used and used != [current]) or len(new) > room:
+            # Start the row on a fresh subpage, repeating tiles it shares with earlier rows.
+            if len(g.tiles) % TILES_PER_DRCS_SUBPAGE:
+                g.tiles += [g.tiles[-1]] * room
+            new = list(dict.fromkeys(t for (r, _), (t, _) in found.items() if r == cy))
+            for t in new:
+                index[t] = len(g.tiles)
+                g.tiles.append(t)
+        else:
+            for t in new:
+                index[t] = len(g.tiles)
+                g.tiles.append(t)
+        for (r, cx), (t, pal) in found.items():
+            if r == cy:
+                g.cells[(top_row + cy, left_col + cx)] = (index[t], pal)
     return g

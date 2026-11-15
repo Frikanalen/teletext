@@ -85,15 +85,30 @@ class GraphicTest(unittest.TestCase):
         self.assertEqual(sub[0]["packets"][0]["designation"], 3)
 
     def test_ppm(self):
-        path = os.path.join(os.path.dirname(L.__file__), "assets", "logo.ppm")
+        path = os.path.join(os.path.dirname(L.__file__), "assets", "wordmark.ppm")
         pic = L.read_ppm(path, L.BRAND[0])
-        self.assertEqual((pic.width, pic.height), (204, 30))
+        self.assertEqual((pic.width, pic.height), (355, 27))
 
 
 class IndexLogoTest(unittest.TestCase):
-    def test_logo_fits_one_drcs_subpage_and_x26(self):
-        self.assertLessEqual(len(logo().tiles), L.TILES_PER_DRCS_SUBPAGE)
+    def test_logo_fits_drcs_and_x26(self):
+        g = logo()
+        self.assertLessEqual(len(g.tiles), 3 * L.TILES_PER_DRCS_SUBPAGE)
+        self.assertEqual(len(g.drcs_subpages()), -(-len(g.tiles) // L.TILES_PER_DRCS_SUBPAGE))
+        # Each row draws from one DRCS subpage, named by its subcode (1, 2, ...).
+        for row in range(1, 6):
+            subs = {t // L.TILES_PER_DRCS_SUBPAGE for (r, _), (t, _) in g.cells.items() if r == row}
+            self.assertEqual(len(subs), 1, row)
+        modes = [d for a, m, d in g.x26() if m == 0x18]
+        self.assertTrue(modes)
+        self.assertTrue(all(0x41 <= d <= 0x43 for d in modes))
         e = enhancements(IndexConfig())
+        # The colour key buttons (rows 23-24) use the standard colours from table 0.
+        x26 = e["x26"]
+        row23 = x26.index((63, 0x04, 0))
+        self.assertEqual(
+            x26[row23 + 1 : row23 + 5], [(1, 0, 1), (11, 0, 2), (21, 0, 3), (31, 0, 6)]
+        )
         # Room left for ttxd's Æ/Ø substitutions (16 packets of 13, less a terminator).
         self.assertLess(len(e["x26"]), 160)
         self.assertEqual([p["packet"] for p in e["packets"]], [27, 28])

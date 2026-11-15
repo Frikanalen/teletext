@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime
 
-from teletext_pages.index import Entry, IndexConfig, directory, render
+from teletext_pages.index import Entry, IndexConfig, directory, fastext, render
 from teletext_pages.markup import ROWS, cells, preview
 from teletext_pages.schedule import next_change, now_and_next, parse
 
@@ -77,19 +77,60 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(len(rows), ROWS)
         self.assertTrue(all(cells(r) <= 40 for r in rows))
         text = [preview(r).rstrip() for r in rows]
-        self.assertIn("F R I K A N A L E N", text[1])
-        self.assertTrue(rows[5].endswith("{red}{flash}DIREKTE"))
-        self.assertEqual(text[6], " 18:00 Debatt: Hva skjer med kanalen? En")
-        self.assertEqual(text[7], "       svært lang tittel som må kuttes")
+        self.assertEqual(text[0], "          frikanalen.tv        TEKST-TV")
+        self.assertTrue(text[4].endswith("Sivilsamfunnets kanal"))
+        self.assertIn("{gwhite}", rows[2])
+        self.assertTrue(text[7].startswith("   NÅ PÅ FRIKANALEN"))
+        self.assertTrue(rows[7].endswith("{flash}DIREKTE "))
+        self.assertEqual(text[8], " 18:00 Debatt: Hva skjer med kanalen? En")
+        self.assertEqual(text[9], "       svært lang tittel som må kuttes")
         # Outside text cannot inject markup.
-        self.assertEqual(text[8], "       Frikanalen (red)")
-        self.assertEqual(text[11], " 19:04 Været")
-        self.assertEqual(text[12], "")
-        self.assertEqual(text[15], " SIDER")
-        self.assertEqual(text[16], " Sendeplan " + "." * 25 + " 200")
-        self.assertEqual(text[17], " Teksting " + "." * 26 + " 888")
+        self.assertEqual(text[10], "       Frikanalen (red)")
+        self.assertEqual(text[13], " 19:04 Været")
+        self.assertEqual(text[14], "")
+        self.assertTrue(text[17].startswith("   SIDER"))
+        self.assertEqual(text[18], " Sendeplan " + "." * 25 + " 200")
+        self.assertEqual(text[19], " Teksting " + "." * 26 + " 888")
+        self.assertEqual(rows[5].count("{g"), 3)  # three bars
+        self.assertEqual(rows[22].count("{g"), 4)  # four buttons
+        self.assertEqual(rows[23], "{red}Sendeplan{green}Teksting")
 
     def test_render_empty_schedule(self):
         rows = render(CFG, None, None, [])
-        self.assertEqual(preview(rows[6]).strip(), "Ingen program i sendeplanen")
+        self.assertEqual(preview(rows[8]).strip(), "Ingen program i sendeplanen")
         self.assertEqual(len(rows), ROWS)
+
+
+class FastextTest(unittest.TestCase):
+    def test_links(self):
+        # Decode as libzvbi does (packet.c, unham_page_link).
+        ham = [
+            0x15,
+            0x02,
+            0x49,
+            0x5E,
+            0x64,
+            0x73,
+            0x38,
+            0x2F,
+            0xD0,
+            0xC7,
+            0x8C,
+            0x9B,
+            0xA1,
+            0xB6,
+            0xFD,
+            0xEA,
+        ]
+        raw = fastext(CFG, [Entry("200", "A"), Entry("888", "B")])["raw"]
+        self.assertEqual(len(raw), 39)
+        n = [ham.index(b) for b in raw[:37]]
+        pages = []
+        for i in range(6):
+            b1 = n[6 * i] | n[6 * i + 1] << 4
+            b2 = n[6 * i + 2] | n[6 * i + 3] << 4
+            b3 = n[6 * i + 4] | n[6 * i + 5] << 4
+            m = ((b3 >> 5) & 6) + (b2 >> 7)
+            pages.append(f"{(1 ^ m) or 8}{b1:02X}")
+        self.assertEqual(pages, ["200", "888", "8FF", "8FF", "8FF", "100"])
+        self.assertEqual(n[36] >> 3, 1)  # show row 24

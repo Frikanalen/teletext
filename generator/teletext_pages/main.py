@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from . import schedule
-from .index import Entry, IndexConfig, directory, enhancements, logo, render
+from .index import Entry, IndexConfig, directory, enhancements, fastext, logo, render
 from .markup import COLS, preview
 from .ttxd import Ttxd, TtxdError
 
@@ -28,6 +28,8 @@ MAX_FLASH_ROWS = 6
 # and how often to try meanwhile.
 FIRST_SCHEDULE_WAIT = 60
 FIRST_SCHEDULE_RETRY = 5
+# How often the logo's DRCS page may go round the carousel (ttxd's repeat_secs).
+DRCS_REPEAT_SECS = 8
 
 
 @dataclass
@@ -84,6 +86,7 @@ class Pusher:
         flags: dict | None = None,
         cycle_secs: int = 10,
         flash: bool = True,
+        repeat_secs: int | None = None,
     ):
         self.ttxd = ttxd
         self.page = page
@@ -93,6 +96,7 @@ class Pusher:
         self.flags = flags
         self.cycle_secs = cycle_secs
         self.flash = flash
+        self.repeat_secs = repeat_secs
         self.sent: list | None = None
         self.sent_at = 0.0
 
@@ -122,6 +126,7 @@ class Pusher:
                     cycle_secs=self.cycle_secs,
                     flash=flash,
                     flags=self.flags,
+                    repeat_secs=self.repeat_secs,
                 )
                 self.sent_at = self.clock()
                 log.info("page %s sent%s", self.page, " with flash" if flash else "")
@@ -159,12 +164,16 @@ class IndexGenerator:
         entries = directory(self.cfg.index, self.live_pages)
         return render(self.cfg.index, current, upcoming, entries)
 
-    def page(self, at: datetime):
-        """The index subpage as sent to ttxd: rows, plus Level 2.5 data if enabled."""
-        rows = self.rows(at)
-        if not self.cfg.index.level25:
-            return rows
-        return {"rows": rows, **enhancements(self.cfg.index)}
+    def page(self, at: datetime) -> dict:
+        """The index subpage as sent to ttxd: rows, the fastext links, and Level 2.5
+        data if enabled."""
+        links = fastext(self.cfg.index, directory(self.cfg.index, self.live_pages))
+        page = {"rows": self.rows(at), "packets": [links]}
+        if self.cfg.index.level25:
+            extra = enhancements(self.cfg.index)
+            page["x26"] = extra["x26"]
+            page["packets"] += extra["packets"]
+        return page
 
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)
@@ -201,7 +210,9 @@ def main(argv: list[str] | None = None) -> int:
         log.error("no ttxd token: set TTXD_TOKEN or token in %s", args.config)
         return 2
     pusher = Pusher(ttxd, cfg.index.page, cfg.ttl_secs, cfg.refresh_secs)
-    # The logo's DRCS page: hidden (inhibit display), one subpage per 48 tiles.
+    # The logo's DRCS page: hidden (inhibit display), one subpage per 48 tiles. It
+    # goes round at most every DRCS_REPEAT_SECS, so a decoder has every subpage after
+    # that many seconds per subpage.
     drcs = Pusher(
         ttxd,
         cfg.index.drcs_page,
@@ -209,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg.refresh_secs,
         flags={"inhibit_display": True},
         cycle_secs=1,
+        repeat_secs=DRCS_REPEAT_SECS,
     )
     started = time.monotonic()
     while True:
