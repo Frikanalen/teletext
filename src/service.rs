@@ -28,6 +28,12 @@ pub struct StoredPage {
     /// Header control bits the publisher asked for.
     #[serde(default)]
     pub flags: PageFlags,
+    /// Send this page at most once per this many seconds in the carousel. For data
+    /// pages (DRCS, objects) that rarely change; None = every pass.
+    #[serde(default)]
+    pub repeat_secs: Option<u32>,
+    #[serde(skip)]
+    last_sent: Option<SystemTime>,
     #[serde(skip)]
     sub_idx: usize,
     #[serde(skip)]
@@ -49,6 +55,8 @@ impl StoredPage {
             expires: ttl.map(|t| now + t),
             updated: now,
             flags: PageFlags::default(),
+            repeat_secs: None,
+            last_sent: None,
             sub_idx: 0,
             sub_since: None,
         }
@@ -321,6 +329,12 @@ impl Service {
             if page.expired(now) || page.subpages.is_empty() {
                 continue;
             }
+            if let (Some(r), Some(last)) = (page.repeat_secs, page.last_sent)
+                && now.duration_since(last).unwrap_or_default() < Duration::from_secs(r as u64)
+            {
+                continue;
+            }
+            page.last_sent = Some(now);
             let since = *page.sub_since.get_or_insert(now);
             if now.duration_since(since).unwrap_or_default().as_secs() >= page.cycle_secs as u64 {
                 page.sub_idx = (page.sub_idx + 1) % page.subpages.len();
@@ -632,6 +646,23 @@ mod tests {
         }
         assert!(s.stats.carousel_packets > 0);
         assert!(s.stats.flash_packets <= 30 + 200);
+    }
+
+    #[test]
+    fn repeat_secs_limits_how_often_a_data_page_goes_out() {
+        let now = SystemTime::now();
+        let mut s = svc_with(&["100"]);
+        let mut drcs = StoredPage::new("t", vec![Content::default()], 10, None, now);
+        drcs.repeat_secs = Some(30);
+        s.put_page("10F".parse().unwrap(), drcs, false);
+        let out = run(&mut s, 100); // 2 s
+        let sent = |p: u8| {
+            out.iter()
+                .filter(|x| row_of(x) == 0 && page_of(x) == p)
+                .count()
+        };
+        assert_eq!(sent(0x0F), 1);
+        assert!(sent(0x00) > 5);
     }
 
     #[test]

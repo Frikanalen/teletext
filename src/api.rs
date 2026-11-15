@@ -125,15 +125,33 @@ struct PutPage {
     flash: bool,
     #[serde(default)]
     flags: PageFlags,
+    /// Send at most once per this many seconds (for data pages such as DRCS).
+    repeat_secs: Option<u32>,
 }
 
 /// A subpage: a list of markup rows (first entry = row 1), or an object that can also
 /// carry raw rows and Level 2.5 enhancement data.
 #[derive(Deserialize)]
-#[serde(untagged)]
+#[serde(try_from = "Value")]
 enum SubpageIn {
     Rows(Vec<String>),
     Full(FullSubpage),
+}
+
+// Not `#[serde(untagged)]`: that hides the real error behind "did not match any variant".
+impl TryFrom<Value> for SubpageIn {
+    type Error = String;
+    fn try_from(v: Value) -> Result<Self, String> {
+        match v {
+            Value::Array(_) => serde_json::from_value(v)
+                .map(SubpageIn::Rows)
+                .map_err(|e| format!("subpage rows: {e}")),
+            Value::Object(_) => serde_json::from_value(v)
+                .map(SubpageIn::Full)
+                .map_err(|e| format!("subpage: {e}")),
+            _ => Err("a subpage is a list of rows or an object".into()),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -216,6 +234,7 @@ async fn put_page(
         now,
     );
     stored.flags = body.flags;
+    stored.repeat_secs = body.repeat_secs;
     st.svc.lock().unwrap().put_page(no, stored, body.flash);
     Ok(Json(json!({ "page": no.to_string(), "ok": true })))
 }
@@ -407,5 +426,24 @@ mod tests {
         let bad = json!({ "subpages": [{ "raw_rows": { "1": [1, 2] } }] });
         let (s, _) = call(&app, "PUT", "/v1/pages/20F", Some("secret"), bad).await;
         assert_eq!(s, StatusCode::BAD_REQUEST);
+        // A typo in a field name says which field.
+        let bad = json!({ "subpages": [{ "rowz": [] }] });
+        let (s, v) = call(&app, "PUT", "/v1/pages/20F", Some("secret"), bad).await;
+        assert_ne!(s, StatusCode::OK);
+        assert!(v.to_string().contains("rowz") || s == StatusCode::UNPROCESSABLE_ENTITY);
+        let bad = json!({ "subpages": [{ "packets": [{ "packet": 28, "designation": 0, "triplets": [[64, 0, 0]] }] }] });
+        let (s, _) = call(&app, "PUT", "/v1/pages/20F", Some("secret"), bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let ok = json!({ "subpages": [["x"]], "repeat_secs": 30 });
+        assert_eq!(
+            call(&app, "PUT", "/v1/pages/20F", Some("secret"), ok)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            svc.lock().unwrap().pages[&"20F".parse().unwrap()].repeat_secs,
+            Some(30)
+        );
     }
 }
