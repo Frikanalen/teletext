@@ -66,22 +66,14 @@ page (see `teletext_pages/level25.py`):
   colour table 0, so they still match the remote.
 - Set `level25 = false` under `[index]` to send a plain Level 1 page.
 
-## Ticker
-
-The row above the colour keys scrolls the programmes after the next one ("SENERE").
-ttxd moves it from its own clock (`tickers` in docs/api.md), at 4 cells a second, which
-costs the publisher about 8 packets a second of its flash budget; the generator only
-sends the text, and sends the page again when that changes. Set `ticker = false`
-under `[index]` to leave it out.
-
 ## Sprites
 
 On a Level 2.5 decoder the sky moves: stars twinkle, and snow and rain fall a few
 pixels a step, on into the cell below where that is empty sky. The generator sends the
 page's X/26 triplets for each of six frames (`animation.x26` in docs/api.md) and ttxd
-steps through them, every `sprite_ms` (500 by default) under `[index]`. The triplets
-already go out with every ticker step, so at that pace the motion costs next to
-nothing more. Set `sprites = false` to keep the sky still. A ttxd too old for it gets
+steps through them, every `sprite_ms` (500 by default) under `[index]`. Each step
+is the page's header and its X/26-28 packets, about 20 packets a second of the flash
+budget at that pace. Set `sprites = false` to keep the sky still. A ttxd too old for it gets
 the page without the animation.
 
 Level 2.5 DRCS is one bit per pixel and a cell has one foreground colour, so the logo
