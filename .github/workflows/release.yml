@@ -1,28 +1,55 @@
 name: Release
-# Tag vX.Y.Z on main to publish a ttxd binary with DeckLink output.
+# Builds ttxd with DeckLink output and attaches it to the release for a tag.
+# Normally called by release-please.yml when it cuts a release.
 on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  # A hand-pushed tag still builds on its own.
   push:
     tags: ["v*"]
+  # Rebuild an existing tag without deleting and re-pushing it.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, e.g. v0.2.0
+        required: true
+        type: string
 permissions:
   contents: write
 jobs:
   build:
     # Same Ubuntu release as sdi-test1, so the glibc matches.
     runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     steps:
+      - name: Check the tag name
+        run: |
+          case "$TAG" in v*) ;; *) echo "::error::expected a v-prefixed tag, got '$TAG'"; exit 1;; esac
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Check the tag matches Cargo.toml
         run: |
           v=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
-          test "v$v" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $v"; exit 1; }
+          test "v$v" = "$TAG" || { echo "tag $TAG but Cargo.toml says $v"; exit 1; }
       - run: cargo test --locked
       - run: cargo build --release --locked --features decklink
       - name: Package
         run: |
           cp target/release/ttxd ttxd-x86_64-linux-gnu
           sha256sum ttxd-x86_64-linux-gnu > ttxd-x86_64-linux-gnu.sha256
-      - name: Publish the release
+      - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" ttxd-x86_64-linux-gnu ttxd-x86_64-linux-gnu.sha256 --generate-notes
+        run: |
+          # release-please has already created the release; a hand-pushed tag has not.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" ttxd-x86_64-linux-gnu ttxd-x86_64-linux-gnu.sha256 --clobber
+          else
+            gh release create "$TAG" ttxd-x86_64-linux-gnu ttxd-x86_64-linux-gnu.sha256 --verify-tag --generate-notes
+          fi
