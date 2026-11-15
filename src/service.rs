@@ -232,6 +232,8 @@ pub struct Service {
     pub gdrcs_page: PageNo,
     /// Pages whose rows motion changed since the last call to `take_motion_updates`.
     motion_updates: Vec<PageNo>,
+    /// The wall-clock second the page headers were last refreshed in.
+    clock_second: u64,
 }
 
 /// Owner of the pages ttxd builds itself (MOT, GPOP, GDRCS).
@@ -260,6 +262,7 @@ impl Service {
             gpop_page: PageNo::new(8, 0xE8),
             gdrcs_page: PageNo::new(8, 0xE9),
             motion_updates: vec![],
+            clock_second: 0,
         }
     }
 
@@ -496,6 +499,55 @@ impl Service {
         }
     }
 
+    /// As each second begins, send the header of every page on show again (no erase, no rows).
+    /// Decoders that redraw a page only when it arrives (VLC, which ignores the rolling
+    /// header) then show a clock that ticks every second instead of once per carousel
+    /// pass. Only the subpage the carousel last sent, so the decoder has it to update.
+    /// About one packet per page per second.
+    fn refresh_clocks(&mut self, now: SystemTime) {
+        let since_epoch = now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        let sec = since_epoch.as_secs();
+        if sec == self.clock_second {
+            return;
+        }
+        self.clock_second = sec;
+        let second = SystemTime::UNIX_EPOCH + Duration::from_secs(sec);
+        let due: Vec<(PageNo, u16, Flags)> = self
+            .pages
+            .iter()
+            .filter(|(no, p)| {
+                p.owner != TTXD_OWNER
+                    && !p.flags.inhibit_display
+                    && !p.flags.suppress_header
+                    // Not when the carousel already sent it in this second.
+                    && p.last_sent.is_some_and(|t| t < second)
+                    && !p.expired(now)
+                    && !p.subpages.is_empty()
+                    && no.num >> 4 <= 9
+                    && no.num & 15 <= 9
+                    && !self.flashes.iter().any(|u| u.page == **no)
+            })
+            .map(|(no, p)| {
+                let sub = p.sub_idx % p.subpages.len();
+                (*no, p.subcode(sub), p.header_flags(Flags::default()))
+            })
+            .collect();
+        for (no, subcode, flags) in due {
+            self.flashes.push_back(Unit {
+                tier: Tier::Flash,
+                page: no,
+                subcode,
+                flags,
+                header_sent: false,
+                rest: VecDeque::new(),
+                owner: None,
+                held: false,
+            });
+        }
+    }
+
     fn queue_flash(&mut self, unit: Unit) {
         // A newer flash of the same page replaces a queued one.
         self.flashes
@@ -583,6 +635,7 @@ impl Service {
         self.tick_motion(now);
         self.cycle_start = false;
         self.stats.frames += 1;
+        self.refresh_clocks(now);
         for b in self.buckets.values_mut() {
             b.tokens = (b.tokens + b.rate / FRAMES_PER_SEC).min(b.burst);
         }
@@ -1057,6 +1110,46 @@ mod tests {
         let text = String::from_utf8_lossy(&t);
         assert!(text.starts_with("FRIKANALEN"));
         assert_eq!(&text[26..27], ":");
+    }
+
+    #[test]
+    fn page_headers_go_out_again_every_second_for_the_clock() {
+        // A carousel that takes longer than a second to go round.
+        let names: Vec<String> = (0..15).map(|i| format!("1{i:02}")).collect();
+        let mut s = svc_with(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        for p in s.pages.values_mut() {
+            p.subpages[0] = Content::from_markup(&vec!["x".to_string(); 23]).unwrap();
+        }
+        let start = SystemTime::now();
+        let mut headers = vec![];
+        let mut full_passes = 0;
+        for f in 0..250u64 {
+            let frame = s.next_link_frame(start + Duration::from_millis(20 * f));
+            for (k, p) in &frame.packets {
+                if mag_of(p) == 1 && row_of(p) == 0 && page_of(p) == 0x00 {
+                    headers.push((f, *k));
+                }
+                if mag_of(p) == 1 && row_of(p) == 1 {
+                    full_passes += 1;
+                }
+            }
+        }
+        let refreshes: Vec<u64> = headers
+            .iter()
+            .filter(|(_, k)| *k == Kind::Flash)
+            .map(|(f, _)| *f)
+            .collect();
+        // Once a second (unless the carousel has only just sent it), alongside the
+        // carousel's own passes, which still go round.
+        assert!(refreshes.len() >= 3, "{headers:?}");
+        // A refresh waits for a carousel page in progress (up to 5 frames).
+        assert!(
+            refreshes
+                .windows(2)
+                .all(|w| (44..=56).contains(&(w[1] - w[0]))),
+            "{refreshes:?}"
+        );
+        assert!(full_passes >= 2, "{full_passes}");
     }
 
     #[test]
