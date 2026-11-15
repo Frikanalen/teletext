@@ -8,6 +8,7 @@ pub mod charset;
 pub mod config;
 #[cfg(feature = "decklink")]
 pub mod decklink;
+pub mod feed;
 pub mod ham;
 pub mod link;
 pub mod op47;

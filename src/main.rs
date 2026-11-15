@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
 use ttxd::service::{Service, StoredPage};
-use ttxd::{api, config, link, p830, page};
+use ttxd::{api, config, feed, link, p830, page};
 
 fn load_snapshot(path: &std::path::Path) -> BTreeMap<page::PageNo, StoredPage> {
     match std::fs::read(path) {
@@ -155,9 +155,22 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let feed = feed::Feed::new(cfg.public_max_clients);
+    if let Some(addr) = &cfg.public_listen {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        tracing::info!("public feed on {addr}");
+        let app = feed::router(svc.clone(), feed.clone());
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!("public feed: {e}");
+            }
+        });
+    }
+
     let state = api::AppState {
         svc,
         publishers: Arc::new(cfg.publishers),
+        feed,
     };
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     tracing::info!("API on {}", cfg.listen);

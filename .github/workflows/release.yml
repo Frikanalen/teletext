@@ -54,3 +54,21 @@ jobs:
           else
             gh release create "$TAG" ttx-inject-x86_64-linux-gnu ttx-inject-x86_64-linux-gnu.sha256 --verify-tag --generate-notes
           fi
+
+  # The generator's container image, tagged with the release.
+  image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+
+  # ttxd's container image, tagged with the release; the chart asks for it.
+  ttxd-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image-ttxd.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
