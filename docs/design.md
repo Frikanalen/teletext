@@ -26,9 +26,12 @@ teletext is merged with the programme further down the chain.
 720p has no vertical blanking lines for teletext the way 625-line SD does. In HD-SDI,
 WST teletext is carried in VANC as OP-47 (SMPTE RDD-08): ANC packet DID 0x43, SDID 0x02,
 holding a *Subtitling Distribution Packet* (SDP) with up to 5 teletext lines. At 50
-frames/s one SDP per frame is 250 teletext packets/s. The encoding appliance also takes
-several SDPs per frame (its multi-packet mode); ttx-inject sends 1-3 (`op47_packets`),
-so up to 750 packets/s. The appliance reserves 338.4 kbit/s for the teletext PID, which
+frames/s one SDP per frame is 250 teletext packets/s. The encoding appliance's
+"multi-packet" mode wants each SDP wrapped in an ANC Multipacket (DID 0x43, SDID 0x03,
+OP-47 section 6; ttx-inject `op47_multipacket`). A multipacket is capped at 255 words, so
+it holds one full SDP. ttx-inject can send 1-3 SDPs (or multipackets) per frame
+(`op47_packets`), up to 750 packets/s; whether the appliance takes more than one per
+frame is not yet verified. The appliance reserves 338.4 kbit/s for the teletext PID, which
 is 9 TS packets per 40 ms: a PES of 35 lines, a full 625-line VBI. 3 SDPs (15 lines per
 20 ms, a PES of exactly 4 TS packets) fit inside it; 4 would not. A page is about 25
 packets, so about 10 pages/s per SDP.

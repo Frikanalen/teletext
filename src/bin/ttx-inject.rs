@@ -33,6 +33,11 @@ struct Config {
     /// must be in multi-packet mode for more than 1.
     #[serde(default = "default_op47_packets")]
     op47_packets: usize,
+    /// Wrap each OP-47 packet in an ANC Multipacket (DID 0x43, SDID 0x03), for an
+    /// encoder in its "multi-packet" OP-47 mode.
+    #[serde(default)]
+    #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
+    op47_multipacket: bool,
     /// Line numbers put in the OP-47 descriptors, 5 per packet. Defaults to 7 upwards.
     #[serde(default)]
     #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
@@ -323,11 +328,22 @@ fn main() -> anyhow::Result<()> {
     match &cfg.decklink_device {
         #[cfg(feature = "decklink")]
         Some(dev) => {
-            ttxd::decklink::start(dev, cfg.vanc_line, op47_lines, Box::new(move || out.next()))?;
-            tracing::info!(
-                "OP-47 on {dev:?}, VANC line {}, {} packet(s) per frame",
+            ttxd::decklink::start(
+                dev,
                 cfg.vanc_line,
-                cfg.op47_packets
+                op47_lines,
+                cfg.op47_multipacket,
+                Box::new(move || out.next()),
+            )?;
+            tracing::info!(
+                "OP-47 on {dev:?}, VANC line {}, {} packet(s) per frame{}",
+                cfg.vanc_line,
+                cfg.op47_packets,
+                if cfg.op47_multipacket {
+                    ", as multipackets"
+                } else {
+                    ""
+                }
             );
             loop {
                 std::thread::park();

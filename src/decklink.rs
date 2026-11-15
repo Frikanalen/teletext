@@ -26,14 +26,24 @@ struct Ctx {
     next: NextFrame,
     lines: Vec<u8>,
     seq: u16,
+    /// Wrap each SDP in an ANC Multipacket; the VANC line for its line/field word.
+    multipacket: Option<u8>,
 }
 
 extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
     // SAFETY: `user` is the leaked Ctx from `start`, only used from the SDK's callback thread.
     let ctx = unsafe { &mut *(user as *mut Ctx) };
     let packets = (ctx.next)();
-    // The SDPs back to back; the shim splits them by each one's length byte.
-    let all: Vec<u8> = op47::sdps(&packets, &ctx.lines, &mut ctx.seq).concat();
+    // Each ANC packet's user data words, preceded by their count.
+    let mut all = vec![];
+    for s in op47::sdps(&packets, &ctx.lines, &mut ctx.seq) {
+        let udw = match ctx.multipacket {
+            Some(line) => op47::multipacket(&s, line),
+            None => s,
+        };
+        all.push(udw.len() as u8);
+        all.extend(udw);
+    }
     let n = all.len().min(cap);
     // SAFETY: the shim passes a buffer of `cap` bytes.
     unsafe { std::ptr::copy_nonoverlapping(all.as_ptr(), buf, n) };
@@ -41,8 +51,15 @@ extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
 }
 
 /// Start playback on the named device. Runs until the process exits. `lines` holds 5
-/// descriptor lines per OP-47 packet; all packets go on `vanc_line`.
-pub fn start(device: &str, vanc_line: u32, lines: Vec<u8>, next: NextFrame) -> anyhow::Result<()> {
+/// descriptor lines per OP-47 packet; all packets go on `vanc_line`. With
+/// `multipacket`, each SDP goes out wrapped in an ANC Multipacket (SDID 0x03).
+pub fn start(
+    device: &str,
+    vanc_line: u32,
+    lines: Vec<u8>,
+    multipacket: bool,
+    next: NextFrame,
+) -> anyhow::Result<()> {
     let sdps = lines.len() / op47::MAX_PACKETS;
     anyhow::ensure!(
         (1..=crate::link::MAX_SDPS).contains(&sdps),
@@ -53,6 +70,7 @@ pub fn start(device: &str, vanc_line: u32, lines: Vec<u8>, next: NextFrame) -> a
         next,
         lines,
         seq: 0,
+        multipacket: multipacket.then_some(vanc_line as u8),
     }));
     let name = CString::new(device)?;
     // SAFETY: valid C string and callback; ctx lives for the rest of the process.
@@ -60,7 +78,11 @@ pub fn start(device: &str, vanc_line: u32, lines: Vec<u8>, next: NextFrame) -> a
         ttx_decklink_start(
             name.as_ptr(),
             op47::DID,
-            op47::SDID,
+            if multipacket {
+                op47::SDID_MULTIPACKET
+            } else {
+                op47::SDID
+            },
             vanc_line,
             sdps as u32,
             fill,

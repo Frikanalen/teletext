@@ -18,6 +18,20 @@ use crate::page::Packet;
 
 pub const DID: u8 = 0x43;
 pub const SDID: u8 = 0x02;
+/// The ANC Multipacket (OP-47 section 6): whole ANC packets without their ADF and
+/// checksum, here one SDP each. Encoders in "multi-packet" mode want this.
+pub const SDID_MULTIPACKET: u8 = 0x03;
+
+/// Wrap an SDP in an ANC Multipacket: a priority word, then for the inner packet its
+/// line/field word (b0-4 line, b5 = field 1), NDID, NSDID, NDC and the SDP. The outer
+/// SMPTE 291 wrapper (parity on every word, checksum) is the SDK's.
+pub fn multipacket(sdp: &[u8], line: u8) -> Vec<u8> {
+    assert!(sdp.len() + 5 <= 255, "SDP too long for a multipacket");
+    let mut v = Vec::with_capacity(sdp.len() + 5);
+    v.extend([0, 0x20 | (line & 0x1F), DID, SDID, sdp.len() as u8]);
+    v.extend_from_slice(sdp);
+    v
+}
 pub const MAX_PACKETS: usize = 5;
 
 /// One frame's packets as `sdps` SDPs (at least one, even with no packets). Packets
@@ -85,6 +99,15 @@ mod tests {
         assert_eq!(v.iter().fold(0u8, |a, &b| a.wrapping_add(b)), 0);
         // A full SDP fits in one SMPTE 291 packet (max 255 user data words).
         assert!(sdp(&[[0; 42]; 5], &[7, 8, 9, 10, 11], 0).len() <= 255);
+    }
+
+    #[test]
+    fn multipacket_wraps_one_full_sdp() {
+        let s = sdp(&[[0; 42]; 5], &[7, 8, 9, 10, 11], 0);
+        let m = multipacket(&s, 9);
+        assert_eq!(&m[..5], &[0, 0x29, 0x43, 0x02, s.len() as u8]);
+        assert_eq!(&m[5..], &s[..]);
+        assert!(m.len() <= 255);
     }
 
     #[test]
