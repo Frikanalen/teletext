@@ -24,6 +24,10 @@ log = logging.getLogger("ttx-pages")
 
 # A change to more rows than this is sent as a whole page instead of a row flash.
 MAX_FLASH_ROWS = 6
+# At startup, how long to wait for a first schedule before sending the page anyway,
+# and how often to try meanwhile.
+FIRST_SCHEDULE_WAIT = 60
+FIRST_SCHEDULE_RETRY = 5
 
 
 @dataclass
@@ -96,11 +100,13 @@ class IndexGenerator:
         self.cfg = cfg
         self.ttxd = ttxd
         self.items: list[schedule.Programme] = []
+        self.have_schedule = False
         self.live_pages: set[str] | None = None
 
     def refresh(self) -> None:
         try:
             self.items = schedule.fetch(self.cfg.api_url)
+            self.have_schedule = True
         except (OSError, ValueError, KeyError, TypeError) as e:  # keep the last schedule
             log.warning("schedule: %s", e)
         try:
@@ -148,8 +154,13 @@ def main(argv: list[str] | None = None) -> int:
         log.error("no ttxd token: set TTXD_TOKEN or token in %s", args.config)
         return 2
     pusher = Pusher(ttxd, cfg.index.page, cfg.ttl_secs, cfg.refresh_secs)
+    started = time.monotonic()
     while True:
         gen.refresh()
+        if not gen.have_schedule and time.monotonic() - started < FIRST_SCHEDULE_WAIT:
+            # Don't put "Ingen program" on air just because the first fetch failed.
+            time.sleep(FIRST_SCHEDULE_RETRY)
+            continue
         now = datetime.now(schedule.OSLO)
         pusher.push(gen.rows(now))
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
