@@ -191,6 +191,20 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let feed = feed::Feed::new(cfg.public_max_clients);
+    // Rows that tickers and animations change reach the web viewer as page events.
+    {
+        let (svc, feed) = (svc.clone(), feed.clone());
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_millis(250));
+            loop {
+                tick.tick().await;
+                let mut s = svc.lock().unwrap();
+                for no in s.take_motion_updates() {
+                    feed.page(&s, no);
+                }
+            }
+        });
+    }
     if let Some(addr) = &cfg.public_listen {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!("public feed on {addr}");
