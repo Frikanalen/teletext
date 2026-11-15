@@ -3,7 +3,7 @@
 //!   GET    /v1/status
 //!   GET    /v1/pages                     list pages
 //!   GET    /v1/pages/{page}              page with a plain-text preview
-//!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...],...], cycle_secs?, ttl_secs?, flash?}
+//!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets},...], cycle_secs?, ttl_secs?, flash?, flags?}
 //!   DELETE /v1/pages/{page}
 //!   POST   /v1/pages/{page}/flash        replace rows now {rows:{"5":"text"}, subpage?}
 //!   POST   /v1/subtitles                 show lines     {lines:["...",...], page?}; [] clears
@@ -11,8 +11,8 @@
 //! Writes need `Authorization: Bearer <token>`; each publisher may only touch its own pages.
 
 use crate::config::Publisher;
-use crate::page::{Content, PageNo};
-use crate::service::{Service, StoredPage};
+use crate::page::{Content, PageNo, Triplet};
+use crate::service::{PageFlags, Service, StoredPage};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
@@ -117,13 +117,73 @@ async fn get_page(State(st): State<AppState>, Path(page): Path<String>) -> ApiRe
 
 #[derive(Deserialize)]
 struct PutPage {
-    /// Each subpage is a list of markup rows, first entry = row 1.
-    subpages: Vec<Vec<String>>,
+    subpages: Vec<SubpageIn>,
     #[serde(default = "default_cycle")]
     cycle_secs: u32,
     ttl_secs: Option<u64>,
     #[serde(default)]
     flash: bool,
+    #[serde(default)]
+    flags: PageFlags,
+}
+
+/// A subpage: a list of markup rows (first entry = row 1), or an object that can also
+/// carry raw rows and Level 2.5 enhancement data.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SubpageIn {
+    Rows(Vec<String>),
+    Full(FullSubpage),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FullSubpage {
+    #[serde(default)]
+    rows: Vec<String>,
+    /// Row number ("1".."24") to 40 raw 7-bit codes, replacing that row's markup.
+    /// (String keys: numeric map keys do not survive serde's untagged enums.)
+    #[serde(default)]
+    raw_rows: BTreeMap<String, Vec<u8>>,
+    /// X/26 enhancement triplets [address, mode, data], in active-position order.
+    #[serde(default)]
+    x26: Vec<Triplet>,
+    /// X/27 and X/28 packets.
+    #[serde(default)]
+    packets: Vec<PacketIn>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PacketIn {
+    packet: u8,
+    designation: u8,
+    triplets: Option<Vec<Triplet>>,
+    raw: Option<Vec<u8>>,
+}
+
+impl SubpageIn {
+    fn content(&self) -> Result<Content, String> {
+        let full = match self {
+            SubpageIn::Rows(rows) => return Content::from_markup(rows),
+            SubpageIn::Full(f) => f,
+        };
+        let mut c = Content::from_markup(&full.rows)?;
+        for (row, codes) in &full.raw_rows {
+            let row = row.parse().map_err(|_| format!("bad row number {row:?}"))?;
+            c.set_raw_row(row, codes)?;
+        }
+        for p in &full.packets {
+            c.add_packet(
+                p.packet,
+                p.designation,
+                p.triplets.as_deref(),
+                p.raw.as_deref(),
+            )?;
+        }
+        c.set_x26(full.x26.clone())?;
+        Ok(c)
+    }
 }
 
 fn default_cycle() -> u32 {
@@ -144,17 +204,18 @@ async fn put_page(
     let subpages = body
         .subpages
         .iter()
-        .map(|rows| Content::from_markup(rows))
+        .map(SubpageIn::content)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let now = SystemTime::now();
-    let stored = StoredPage::new(
+    let mut stored = StoredPage::new(
         &publisher.name,
         subpages,
         body.cycle_secs,
         body.ttl_secs.map(Duration::from_secs),
         now,
     );
+    stored.flags = body.flags;
     st.svc.lock().unwrap().put_page(no, stored, body.flash);
     Ok(Json(json!({ "page": no.to_string(), "ok": true })))
 }
@@ -316,5 +377,35 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn level_25_subpage() {
+        let (app, svc) = app();
+        let body = json!({
+            "subpages": [{
+                "rows": ["{yellow}Logo"],
+                "raw_rows": { "2": vec![0x40; 40] },
+                "x26": [[41, 4, 0], [2, 13, 64]],
+                "packets": [{ "packet": 28, "designation": 0, "triplets": [[0, 0, 0]] }]
+            }],
+            "flags": { "inhibit_display": true }
+        });
+        let (s, v) = call(&app, "PUT", "/v1/pages/20F", Some("secret"), body).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        {
+            let svc = svc.lock().unwrap();
+            let p = &svc.pages[&"20F".parse().unwrap()];
+            assert!(p.flags.inhibit_display);
+            assert_eq!(p.subpages[0].rows[1], vec![0x40; 40]);
+            assert_eq!(p.subpages[0].x26.len(), 2);
+            assert_eq!(p.subpages[0].extra.len(), 1);
+        }
+        let bad = json!({ "subpages": [{ "packets": [{ "packet": 26, "designation": 0, "triplets": [] }] }] });
+        let (s, _) = call(&app, "PUT", "/v1/pages/20F", Some("secret"), bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        let bad = json!({ "subpages": [{ "raw_rows": { "1": [1, 2] } }] });
+        let (s, _) = call(&app, "PUT", "/v1/pages/20F", Some("secret"), bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
     }
 }

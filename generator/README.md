@@ -10,6 +10,32 @@ So far there is one page:
   A directory entry is listed only while ttxd is sending that page, unless it has
   `always = true`.
 
+## Level 2.5
+
+On a Level 2.5 decoder, page 100 gets Frikanalen's colours and the logo in pixels;
+older decoders show the plain Level 1 page (see `teletext_pages/level25.py`):
+
+- **Palette.** An X/28/0 packet redefines colour table 2 as the on-air graphics
+  palette and maps the Level 1 colours onto it: black is ink, white is paper, cyan is
+  amber, blue is ink-2, magenta is plum. So every page could use it without changing
+  its markup.
+- **Logo.** `teletext_pages/assets/logo.ppm` (204x30 teletext pixels, cut from the
+  on-air graphics logo) is cut into 12x10 tiles. The 48 distinct tiles go on a hidden
+  DRCS page (`drcs_page`, default `10F`), and X/26 triplets place them on rows 1-3,
+  each cell coloured from colour table 3 (the logo's gradient steps).
+- Set `level25 = false` under `[index]` to send a plain Level 1 page.
+
+The banner has no double height, because a Level 1 double-height row hides the row
+below it on every decoder, which would cut the logo in half.
+
+To see what a decoder makes of it, dump ttxd's T42 debug stream and draw it with
+libzvbi (`tools/t42render.c`):
+
+```sh
+nc 127.0.0.1 4242 > dump.t42      # a few seconds
+t42render dump.t42 100 2.5 page.ppm
+```
+
 ## Running
 
 ```sh

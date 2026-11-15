@@ -62,7 +62,8 @@ impl fmt::Display for PageNo {
     }
 }
 
-/// The content of one (sub)page: 24 rows of 40 codes plus G2 substitutions.
+/// The content of one (sub)page: 24 rows of 40 codes plus G2 substitutions, and any
+/// Level 2.5 enhancement data the publisher supplied.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Content {
     /// rows[0] is display row 1.
@@ -70,13 +71,29 @@ pub struct Content {
     /// (row 1..=24, column, G2 code).
     #[serde(default)]
     pub g2: Vec<(u8, u8, u8)>,
+    /// Publisher's X/26 enhancement triplets (address, mode, data), without a
+    /// termination marker. The G2 substitutions are merged in when encoding.
+    #[serde(default)]
+    pub x26: Vec<Triplet>,
+    /// Publisher's X/27 and X/28 packets: (packet 27 or 28, designation code, the 39
+    /// already coded bytes after the designation).
+    #[serde(default)]
+    pub extra: Vec<(u8, u8, Vec<u8>)>,
 }
+
+/// An enhancement triplet before Hamming 24/18 coding: (address, mode, data).
+pub type Triplet = (u8, u8, u8);
+
+/// Most X/26 triplets one page can carry: 16 packets of 13, less the termination marker.
+pub const MAX_X26: usize = 16 * 13 - 1;
 
 impl Default for Content {
     fn default() -> Self {
         Content {
             rows: vec![vec![b' '; COLS]; ROWS],
             g2: vec![],
+            x26: vec![],
+            extra: vec![],
         }
     }
 }
@@ -104,6 +121,66 @@ impl Content {
         self.g2.retain(|&(r, _, _)| r != row);
         self.g2.extend(g2.into_iter().map(|(col, g)| (row, col, g)));
         self.g2.sort();
+        Ok(())
+    }
+
+    /// Replace display row `row` (1..=24) with 40 raw 7-bit codes (parity is added on
+    /// the way out). For DRCS and object pages, whose rows are data, not text.
+    pub fn set_raw_row(&mut self, row: u8, codes: &[u8]) -> Result<(), String> {
+        if !(1..=ROWS as u8).contains(&row) {
+            return Err(format!("row {row} out of range 1..=24"));
+        }
+        if codes.len() != COLS || codes.iter().any(|&c| c > 0x7F) {
+            return Err(format!("raw row {row} must be {COLS} values 0..=127"));
+        }
+        self.rows[row as usize - 1] = codes.to_vec();
+        self.g2.retain(|&(r, _, _)| r != row);
+        Ok(())
+    }
+
+    /// Add an X/27 or X/28 packet from 13 triplets (Hamming 24/18 coded here) or from
+    /// 39 bytes that are already coded (for X/27/0-3 links, which are Hamming 8/4).
+    pub fn add_packet(
+        &mut self,
+        packet: u8,
+        designation: u8,
+        triplets: Option<&[Triplet]>,
+        raw: Option<&[u8]>,
+    ) -> Result<(), String> {
+        let bytes = match (triplets, raw) {
+            (Some(t), None) if t.len() <= 13 => {
+                let mut b = Vec::with_capacity(39);
+                for i in 0..13 {
+                    let (a, m, d) = t.get(i).copied().unwrap_or((0, 0, 0));
+                    b.extend(triplet(a, m, d));
+                }
+                b
+            }
+            (None, Some(r)) if r.len() == 39 => r.to_vec(),
+            _ => return Err("a packet needs at most 13 triplets or exactly 39 raw bytes".into()),
+        };
+        if !(packet == 27 || packet == 28) || designation > 15 {
+            return Err(format!("packet X/{packet}/{designation} not allowed here"));
+        }
+        self.extra
+            .retain(|(p, d, _)| (*p, *d) != (packet, designation));
+        self.extra.push((packet, designation, bytes));
+        self.extra.sort_by_key(|(p, d, _)| (*p, *d));
+        Ok(())
+    }
+
+    /// Set the publisher's X/26 triplets, checking they fit with the G2 substitutions.
+    pub fn set_x26(&mut self, triplets: Vec<Triplet>) -> Result<(), String> {
+        for &(a, m, d) in &triplets {
+            if a > 63 || m > 31 || d > 127 {
+                return Err(format!("bad triplet ({a}, {m}, {d})"));
+            }
+        }
+        self.x26 = triplets;
+        let n = merge_x26(&self.x26, &self.g2).len();
+        if n > MAX_X26 {
+            return Err(format!("{n} X/26 triplets, max {MAX_X26}"));
+        }
         Ok(())
     }
 
@@ -269,19 +346,68 @@ fn triplet(address: u8, mode: u8, data: u8) -> [u8; 3] {
     ham2418(address as u32 & 0x3F | (mode as u32 & 0x1F) << 6 | (data as u32 & 0x7F) << 11)
 }
 
-/// Build X/26 enhancement packets that place G2 characters at (row, col).
-pub fn x26_packets(mag: u8, subs: &[(u8, u8, u8)]) -> Vec<Packet> {
-    let mut triplets = vec![];
-    let mut cur_row = None;
-    for &(row, col, g2) in subs {
-        if cur_row != Some(row) {
-            // Row address group: 40 means row 24, 41..=63 rows 1..=23. Mode 0x04 sets the active position.
-            let addr = if row == 24 { 40 } else { 40 + row };
-            triplets.push(triplet(addr, 0x04, 0));
-            cur_row = Some(row);
+/// Row address of a display row in a triplet: 40 means row 24, 41..=63 rows 1..=23.
+fn row_address(row: u8) -> u8 {
+    if row == 24 { 40 } else { 40 + row }
+}
+
+/// Merge the publisher's X/26 triplets with the G2 substitutions (row, col, code), in
+/// the ascending active-position order decoders require. The publisher's stream is
+/// split into groups that each start where a triplet moves the active position to a
+/// row (row address triplets with mode 0x01, 0x04 or 0x07); each G2 character goes into
+/// its row's group in column order, and a row with no group gets one.
+pub fn merge_x26(publisher: &[Triplet], subs: &[(u8, u8, u8)]) -> Vec<Triplet> {
+    // (row, triplets); the first group holds what comes before any row is addressed.
+    let mut groups: Vec<(Option<u8>, Vec<Triplet>)> = vec![(None, vec![])];
+    for &t in publisher {
+        let (a, m, _) = t;
+        if a == 63 && m == 0x1F {
+            break; // termination marker
         }
-        triplets.push(triplet(col, 0x0F, g2)); // mode 0x0F: character from G2
+        let moves = a >= 40 && matches!(m, 0x01 | 0x04 | 0x07);
+        if moves {
+            let row = if m == 0x07 {
+                0
+            } else if a == 40 {
+                24
+            } else {
+                a - 40
+            };
+            groups.push((Some(row), vec![t]));
+        } else {
+            groups.last_mut().unwrap().1.push(t);
+        }
     }
+    for &(row, col, code) in subs {
+        let idx = match groups.iter().rposition(|(r, _)| *r == Some(row)) {
+            Some(i) => i,
+            None => {
+                let at = groups
+                    .iter()
+                    .position(|(r, _)| r.is_some_and(|r| r > row))
+                    .unwrap_or(groups.len());
+                groups.insert(at, (Some(row), vec![(row_address(row), 0x04, 0)]));
+                at
+            }
+        };
+        let g = &mut groups[idx].1;
+        // After the row triplets and any column triplet at or before this column.
+        let at = g
+            .iter()
+            .rposition(|&(a, _, _)| a >= 40 || a <= col)
+            .map_or(0, |i| i + 1);
+        g.insert(at, (col, 0x0F, code)); // mode 0x0F: character from G2
+    }
+    groups.into_iter().flat_map(|(_, g)| g).collect()
+}
+
+/// Build X/26 enhancement packets from triplets (a termination marker is added).
+pub fn x26_packets(mag: u8, triplets: &[Triplet]) -> Vec<Packet> {
+    let triplets: Vec<[u8; 3]> = triplets
+        .iter()
+        .take(MAX_X26)
+        .map(|&(a, m, d)| triplet(a, m, d))
+        .collect();
     triplets
         .chunks(13)
         .enumerate()
@@ -314,7 +440,15 @@ pub fn page_packets(
     skip_blank: bool,
 ) -> Vec<Packet> {
     let mut out = vec![header_packet(page, subcode, flags, header)];
-    out.extend(x26_packets(page.mag, &c.g2));
+    // X/27, then X/28, then X/26, before the display rows.
+    for (packet, designation, bytes) in &c.extra {
+        let mut p = [0u8; 42];
+        p[..2].copy_from_slice(&mrag(page.mag, *packet));
+        p[2] = ham84(*designation);
+        p[3..].copy_from_slice(&bytes[..39]);
+        out.push(p);
+    }
+    out.extend(x26_packets(page.mag, &merge_x26(&c.x26, &c.g2)));
     for (i, r) in c.rows.iter().enumerate() {
         if skip_blank && r.iter().all(|&b| b == b' ') {
             continue;
@@ -377,11 +511,78 @@ mod tests {
 
     #[test]
     fn x26_triplets_decode() {
-        let p = x26_packets(1, &[(3, 5, 0x79)]);
+        let p = x26_packets(1, &merge_x26(&[], &[(3, 5, 0x79)]));
         assert_eq!(p.len(), 1);
         let t = |i: usize| unham2418([p[0][3 + i * 3], p[0][4 + i * 3], p[0][5 + i * 3]]).unwrap();
         assert_eq!(t(0), 43 | 0x04 << 6);
         assert_eq!(t(1), 5 | 0x0F << 6 | 0x79 << 11);
         assert_eq!(t(2), 63 | 0x1F << 6);
+    }
+
+    #[test]
+    fn g2_merges_into_publisher_x26_in_position_order() {
+        let publisher = [
+            (0, 0x00, 0x10), // full screen colour: before any row
+            (41, 0x04, 0),   // row 1
+            (2, 0x0D, 0x40), // DRCS at column 2
+            (9, 0x0D, 0x41), // DRCS at column 9
+            (45, 0x04, 0),   // row 5
+            (0, 0x00, 0x12), // foreground colour at column 0
+            (63, 0x1F, 0),   // terminator, dropped
+        ];
+        let subs = [(1, 5, 0x61), (3, 1, 0x69), (5, 7, 0x79), (24, 0, 0x71)];
+        assert_eq!(
+            merge_x26(&publisher, &subs),
+            vec![
+                (0, 0x00, 0x10),
+                (41, 0x04, 0),
+                (2, 0x0D, 0x40),
+                (5, 0x0F, 0x61),
+                (9, 0x0D, 0x41),
+                (43, 0x04, 0),
+                (1, 0x0F, 0x69),
+                (45, 0x04, 0),
+                (0, 0x00, 0x12),
+                (7, 0x0F, 0x79),
+                (40, 0x04, 0),
+                (0, 0x0F, 0x71),
+            ]
+        );
+    }
+
+    #[test]
+    fn enhancement_packets_come_before_rows() {
+        let mut c = Content::from_markup(&["Hei".into()]).unwrap();
+        c.set_x26(vec![(41, 0x04, 0), (0, 0x0D, 0x40)]).unwrap();
+        c.add_packet(28, 0, Some(&[(1, 2, 3)]), None).unwrap();
+        c.add_packet(27, 4, None, Some(&[0x15; 39])).unwrap();
+        assert!(c.add_packet(26, 0, Some(&[]), None).is_err());
+        let pk = page_packets(
+            PageNo::new(1, 0),
+            0,
+            Flags::default(),
+            &[b' '; 32],
+            &c,
+            true,
+        );
+        let rows: Vec<u8> = pk
+            .iter()
+            .map(|p| unham84(p[0]).unwrap() >> 3 | unham84(p[1]).unwrap() << 1)
+            .collect();
+        assert_eq!(rows, vec![0, 27, 28, 26, 1]);
+        assert_eq!(unham84(pk[1][2]), Some(4));
+        assert_eq!(
+            unham2418([pk[2][3], pk[2][4], pk[2][5]]),
+            Some(1 | 2 << 6 | 3 << 11)
+        );
+    }
+
+    #[test]
+    fn raw_rows() {
+        let mut c = Content::default();
+        c.set_raw_row(1, &[0x7F; 40]).unwrap();
+        assert_eq!(c.rows[0][39], 0x7F);
+        assert!(c.set_raw_row(1, &[0x80; 40]).is_err());
+        assert!(c.set_raw_row(25, &[0; 40]).is_err());
     }
 }

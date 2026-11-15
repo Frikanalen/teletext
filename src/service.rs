@@ -25,6 +25,9 @@ pub struct StoredPage {
     /// After this the page leaves the carousel.
     pub expires: Option<SystemTime>,
     pub updated: SystemTime,
+    /// Header control bits the publisher asked for.
+    #[serde(default)]
+    pub flags: PageFlags,
     #[serde(skip)]
     sub_idx: usize,
     #[serde(skip)]
@@ -45,8 +48,18 @@ impl StoredPage {
             cycle_secs: cycle_secs.max(1),
             expires: ttl.map(|t| now + t),
             updated: now,
+            flags: PageFlags::default(),
             sub_idx: 0,
             sub_since: None,
+        }
+    }
+
+    /// Header bits for a transmission of this page, on top of `base`.
+    fn header_flags(&self, base: Flags) -> Flags {
+        Flags {
+            inhibit: base.inhibit || self.flags.inhibit_display,
+            suppress_header: base.suppress_header || self.flags.suppress_header,
+            ..base
         }
     }
 
@@ -61,6 +74,16 @@ impl StoredPage {
             0
         }
     }
+}
+
+/// Header control bits a publisher may set on its page. DRCS and object pages, which
+/// carry data rather than text, set `inhibit_display` (C10) so a decoder never shows
+/// them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PageFlags {
+    pub inhibit_display: bool,
+    pub suppress_header: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -178,10 +201,10 @@ impl Service {
                 Tier::Flash,
                 no,
                 page.subcode(0),
-                Flags {
+                page.header_flags(Flags {
                     erase: true,
                     ..Default::default()
-                },
+                }),
                 &page.subpages[0],
                 true,
                 Some(page.owner.clone()),
@@ -214,7 +237,7 @@ impl Service {
         page.updated = now;
         let mut partial = Content {
             rows: vec![vec![b' '; COLS]; content.rows.len()],
-            g2: content.g2.clone(),
+            ..content.clone()
         };
         for &r in rows.keys() {
             partial.rows[r as usize - 1] = content.rows[r as usize - 1].clone();
@@ -223,19 +246,19 @@ impl Service {
             Tier::Flash,
             no,
             page.subcode(sub),
-            Flags {
+            page.header_flags(Flags {
                 update: true,
                 ..Default::default()
-            },
+            }),
             &partial,
             false,
             Some(page.owner.clone()),
         );
-        // Only the changed rows (X/26 packets are kept whole).
+        // Only the changed rows (enhancement packets X/26-28 are kept whole).
         unit.rest.retain(|p| {
             let row = crate::ham::unham84(p[0]).unwrap_or(0) >> 3
                 | crate::ham::unham84(p[1]).unwrap_or(0) << 1;
-            row == 26 || rows.contains_key(&row)
+            (26..=28).contains(&row) || rows.contains_key(&row)
         });
         self.queue_flash(unit);
         self.dirty = true;
@@ -310,7 +333,7 @@ impl Service {
                 Tier::Carousel,
                 no,
                 page.subcode(idx),
-                Flags::default(),
+                page.header_flags(Flags::default()),
                 &page.subpages[idx],
                 false,
                 None,
