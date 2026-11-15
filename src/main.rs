@@ -10,6 +10,7 @@ mod config;
 mod decklink;
 mod ham;
 mod op47;
+mod p830;
 mod page;
 mod service;
 
@@ -52,6 +53,11 @@ async fn main() -> anyhow::Result<()> {
     )?;
 
     let mut svc = Service::new(&cfg.service_name, load_snapshot(&cfg.snapshot));
+    svc.service_data = Some(p830::ServiceData {
+        initial_page: cfg.initial_page,
+        network_id: cfg.network_id,
+        status: cfg.service_name.clone(),
+    });
     for p in &cfg.publishers {
         svc.set_flash_budget(&p.name, p.flash_per_sec);
     }

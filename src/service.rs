@@ -155,6 +155,7 @@ pub struct Stats {
     pub flash_packets: u64,
     pub carousel_packets: u64,
     pub filler_packets: u64,
+    pub service_data_packets: u64,
 }
 
 pub struct Service {
@@ -170,6 +171,8 @@ pub struct Service {
     filler_mag: u8,
     /// Pages sent but not yet ended by another header of their magazine.
     unterminated: Vec<PageNo>,
+    /// Packet 8/30 contents; sent once a second when set.
+    pub service_data: Option<crate::p830::ServiceData>,
 }
 
 impl Service {
@@ -186,6 +189,7 @@ impl Service {
             buckets: BTreeMap::new(),
             filler_mag: 1,
             unterminated: vec![],
+            service_data: None,
         }
     }
 
@@ -380,6 +384,17 @@ impl Service {
         }
         let header = self.header_text(now.into());
         let mut out = vec![];
+        if let Some(sd) = &self.service_data
+            && self.stats.frames % FRAMES_PER_SEC as u64 == 1
+        {
+            let local: DateTime<Local> = now.into();
+            out.push(crate::p830::packet(
+                sd,
+                now.into(),
+                local.offset().local_minus_utc(),
+            ));
+            self.stats.service_data_packets += 1;
+        }
         while out.len() < PACKETS_PER_FRAME {
             match self.pick(now, &header) {
                 Some((tier, p)) => {
@@ -663,6 +678,24 @@ mod tests {
         };
         assert_eq!(sent(0x0F), 1);
         assert!(sent(0x00) > 5);
+    }
+
+    #[test]
+    fn service_data_goes_out_once_a_second() {
+        let mut s = svc_with(&["100"]);
+        s.service_data = Some(crate::p830::ServiceData {
+            initial_page: "100".parse().unwrap(),
+            network_id: 0,
+            status: "Frikanalen".into(),
+        });
+        let out = run(&mut s, 150); // 3 s
+        assert_eq!(
+            out.iter()
+                .filter(|p| mag_of(p) == 8 && row_of(p) == 30)
+                .count(),
+            3
+        );
+        assert_eq!(s.stats.service_data_packets, 3);
     }
 
     #[test]
