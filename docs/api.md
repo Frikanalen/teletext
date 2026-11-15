@@ -120,6 +120,37 @@ ttxd doesn't interpret them; the generator in `generator/` builds them (see
 `generator/teletext_pages/level25.py`). Older decoders ignore them, so the rows must stand
 on their own as a Level 1 page.
 
+#### Declarative enhancements
+
+Instead of hand-coding triplets, a subpage object can say what it wants, and ttxd
+compiles it to X/26, X/27/0 and X/28/0:
+
+```json
+{
+  "rows": ["{yellow}Sendeplan", "", "Logo:"],
+  "links": { "red": "200", "green": "300", "yellow": "400", "cyan": "500", "index": "100" },
+  "palette": { "colours": ["#0f1926", "#f15645"], "screen": 16, "row": 16, "remap": 6 },
+  "cells": [
+    { "row": 3, "col": 10, "fg": 22, "glyph": "logo-0" },
+    { "row": 5, "col": 2, "fg": 18, "g3": 53 },
+    { "row": 7, "col": 0, "bg": 17 }
+  ],
+  "place": [{ "object": "logo", "row": 3, "col": 30 }]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `links` | fastext: pages for the red, green, yellow and cyan keys and the index key (X/27/0, Level 1.5 and up) |
+| `palette` | this page's own colour tables 2 and 3, same fields as in `PUT /assets` (X/28/0). It replaces the magazine palette on this page, including inside shared objects |
+| `cells` | per cell, any of: `fg` and `bg` (colour 0–31), `glyph` (a shared glyph by name, in the foreground colour) or `g3` (a smooth mosaic or line drawing character `0x20`–`0x7F`). Rows 1–24, columns 0–39. A colour holds from its cell to the end of the row, or until a later cell sets that colour again, as with Level 1 attributes |
+| `place` | shared objects by name, with their top left corner at `row`/`col` |
+
+Names are resolved when the page is stored, so send the page again after changing the
+shared assets. `cells`/`place` can't be combined with raw `x26` in one subpage (they
+compile to the same packets), but `links` and `palette` can go with anything. Level 1
+decoders show only the rows, so the page should still read without the enhancements.
+
 ### `POST /pages/{page}/flash`: change some rows now
 
 ```json

@@ -3,7 +3,7 @@
 //!   GET    /v1/status
 //!   GET    /v1/pages                     list pages
 //!   GET    /v1/pages/{page}              page with a plain-text preview
-//!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets},...], cycle_secs?, ttl_secs?, flash?, flags?}
+//!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets, links, palette, cells, place},...], cycle_secs?, ttl_secs?, flash?, flags?}
 //!   DELETE /v1/pages/{page}
 //!   POST   /v1/pages/{page}/flash        replace rows now {rows:{"5":"text"}, subpage?}
 //!   GET    /v1/assets                    shared Level 2.5 assets and where they ended up
@@ -13,8 +13,9 @@
 //!
 //! Writes need `Authorization: Bearer <token>`; each publisher may only touch its own pages.
 
-use crate::assets::Assets;
+use crate::assets::{Assets, Layout, Palette};
 use crate::config::Publisher;
+use crate::enhance::{Cell, Enhancements, Links, Place};
 use crate::page::{Content, PageNo, Triplet};
 use crate::service::{PageFlags, Service, StoredPage};
 use axum::extract::{Path, State};
@@ -182,6 +183,15 @@ struct FullSubpage {
     /// X/27 and X/28 packets.
     #[serde(default)]
     packets: Vec<PacketIn>,
+    /// Declarative enhancements, compiled by ttxd (see `enhance`).
+    #[serde(default)]
+    links: Option<Links>,
+    #[serde(default)]
+    palette: Option<Palette>,
+    #[serde(default)]
+    cells: Vec<Cell>,
+    #[serde(default)]
+    place: Vec<Place>,
 }
 
 #[derive(Deserialize)]
@@ -194,7 +204,7 @@ struct PacketIn {
 }
 
 impl SubpageIn {
-    fn content(&self) -> Result<Content, String> {
+    fn content(&self, page: PageNo, layout: &Layout) -> Result<Content, String> {
         let full = match self {
             SubpageIn::Rows(rows) => return Content::from_markup(rows),
             SubpageIn::Full(f) => f,
@@ -213,6 +223,13 @@ impl SubpageIn {
             )?;
         }
         c.set_x26(full.x26.clone())?;
+        let e = Enhancements {
+            links: full.links.clone(),
+            palette: full.palette.clone(),
+            cells: full.cells.clone(),
+            place: full.place.clone(),
+        };
+        e.apply(page, layout, &mut c, !full.x26.is_empty())?;
         Ok(c)
     }
 }
@@ -232,10 +249,11 @@ async fn put_page(
     if body.subpages.is_empty() || body.subpages.len() > 99 {
         return Err(err(StatusCode::BAD_REQUEST, "need 1..=99 subpages"));
     }
+    let layout = st.svc.lock().unwrap().assets.validate().unwrap_or_default();
     let subpages = body
         .subpages
         .iter()
-        .map(SubpageIn::content)
+        .map(|s| s.content(no, &layout))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     let now = SystemTime::now();
