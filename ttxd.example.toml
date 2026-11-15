@@ -9,11 +9,8 @@ service_name = "FRIKANALEN"
 # Packet 8/30: first page decoders show, and the network identification code (0 = none).
 initial_page = "100"
 network_id = 0
-# Line numbers in the five OP-47 descriptors.
-op47_lines = [7, 8, 9, 10, 11]
-# SDI output (build with --features decklink).
-decklink_device = "DeckLink Duo (2)"
-vanc_line = 9
+# ttx-inject (on the SDI host) connects here and asks for each frame.
+inject_listen = "0.0.0.0:4243"
 
 [[publisher]]
 name = "schedule"
@@ -26,6 +23,8 @@ flash_per_sec = 100
 [[publisher]]
 name = "subtitles"
 token = "change-me-too"
+# Or read it from the environment instead (e.g. a Kubernetes Secret):
+# token_env = "TTXD_TOKEN_SUBTITLES"
 pages = ["888"]
 subtitles = true
 

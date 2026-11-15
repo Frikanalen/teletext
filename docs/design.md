@@ -6,7 +6,10 @@
 publishers (django-api schedule, bulletins, infographics, live subtitles)
         │  HTTP/JSON, bearer token per publisher
         ▼
-   ttxd on sdi-test1 ──► DeckLink Duo 2 SDI out (720p50 filler frames + OP-47 VANC)
+   ttxd (Kubernetes, namespace teletext)
+        │  link: one frame per request, TCP (src/link.rs)
+        ▼
+   ttx-inject on sdi-test1 ──► DeckLink Duo 2 SDI out (720p50 filler frames + OP-47 VANC)
                                    │
                          merged with programme downstream
                                    ▼
@@ -25,6 +28,25 @@ WST teletext is carried in VANC as OP-47 (SMPTE RDD-08): ANC packet DID 0x43, SD
 holding one *Subtitling Distribution Packet* (SDP) per frame with up to 5 teletext
 lines. At 50 frames/s that is 250 teletext packets/s, roughly a third of a full SD VBI
 allocation. A page is about 25 packets, so about 10 pages/s.
+
+## Split: ttxd and ttx-inject
+
+ttxd runs in Kubernetes. On sdi-test1 there is only ttx-inject, a small program that
+owns the DeckLink card and nothing else: no pages, no API, no scheduler.
+
+The card is the clock. On every frame callback ttx-inject takes the next frame from a
+small buffer and sends ttxd a one-byte request for another; ttxd answers each request
+with exactly one frame (up to 5 packets, each tagged carousel, flash, subtitle, 8/30 or
+filler). While an injector is connected ttxd has no clock of its own; while none is, a
+50 Hz timer keeps its scheduler and T42 stream going. The buffer is 2 frames (40 ms)
+by default. If a frame is late, the card sends that frame with no teletext and
+the packets go out a frame later; nothing is lost.
+
+If ttxd stops answering for 500 ms, ttx-inject replays the last complete carousel
+cycle it saw (cycle starts are flagged in the frames), with the clock in each page
+header rewritten to the current time. Subtitles, flashes and 8/30 are left out of the
+replay, so no stale cue comes back. When ttxd answers again it goes live on the next
+frame. ttxd serves one injector at a time; a new connection replaces the old one.
 
 ## ttxd
 
@@ -58,7 +80,7 @@ One Rust process with four parts.
    enhancement that puts the real letter from the Latin G2 set into the cell on Level 1.5
    and later decoders.
 4. **Outputs.**
-   - The OP-47 SDP for each frame, to the DeckLink (output thread still to come; see below).
+   - Each frame's packets, to ttx-inject, which builds the OP-47 SDP for the card.
    - A raw T42 stream over TCP (42-byte records) for debugging with standard teletext tools.
    - Page previews over the API.
 
@@ -88,8 +110,8 @@ colours), `{double}`, `{normal}`, `{flash}`, `{steady}`, `{box}`, `{endbox}`, `{
 
 ## DeckLink output
 
-`src/decklink.rs` plus `shim/decklink_shim.cpp` (a C ABI over the Desktop Video SDK,
-built with `--features decklink` and `DECKLINK_SDK_INCLUDE`). It does scheduled playback
+In ttx-inject: `src/decklink.rs` plus `shim/decklink_shim.cpp` (a C ABI over the
+Desktop Video SDK, built with `--features decklink` against the vendored headers). It does scheduled playback
 of black 720p50 with each frame's SDP attached through
 `IDeckLinkVideoFrameAncillaryPackets`. The SDK's frame-completion callback is the frame
 clock. Reference lock comes later.
@@ -98,7 +120,7 @@ clock. Reference lock comes later.
 bit set) through the encoding appliance. The output appears as `dvb_teletext` PID 0x96
 in its TS: 50 PES/s with 5 lines each (field 1, lines 7–11). Page 100 decodes byte for
 byte in ffmpeg/libzvbi, including Æ/Ø through X/26. Subtitles on 888 show within a
-frame. ttxd uses about 2.5% of one core and 19 MB.
+frame. ttxd used about 2.5% of one core and 19 MB when it still drove the card itself.
 
 ## Still to verify
 
@@ -108,6 +130,12 @@ frame. ttxd uses about 2.5% of one core and 19 MB.
 
 ## Deployment
 
-A single static binary with a systemd unit and `/etc/ttxd/ttxd.toml` (see
-`ttxd.example.toml`). Publisher tokens come from OpenBao through the Ansible role in
-`infra`.
+- **ttxd**: container image `ghcr.io/frikanalen/ttxd` and the Helm chart in `chart/`,
+  deployed by Argo CD from the clusters repo into namespace `teletext`. Publisher
+  tokens come from OpenBao (`kv/<env>/teletext/ttxd-tokens`) through External Secrets,
+  and reach ttxd as environment variables (`token_env`). The injector link is a
+  LoadBalancer Service with a fixed address on the studio network.
+- **ttx-inject**: a release binary (`ttx-inject-x86_64-linux-gnu`) installed on
+  sdi-test1 by infra's Ansible, with a systemd unit and
+  `/etc/ttx-inject/ttx-inject.toml` (see `ttx-inject.example.toml`). Run it with
+  `TZ=Europe/Oslo` so replayed headers show local time.

@@ -1,5 +1,6 @@
 name: Release
-# Builds ttxd with DeckLink output and attaches it to the release for a tag.
+# Builds ttx-inject (the SDI side, with DeckLink output) and attaches it to the
+# release for a tag. ttxd itself ships as a container image (image.yml).
 # Normally called by release-please.yml when it cuts a release.
 on:
   workflow_call:
@@ -38,20 +39,20 @@ jobs:
           v=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           test "v$v" = "$TAG" || { echo "tag $TAG but Cargo.toml says $v"; exit 1; }
       - run: cargo test --locked
-      - run: cargo build --release --locked --features decklink
+      - run: cargo build --release --locked --features decklink --bin ttx-inject
       - name: Package
         run: |
-          cp target/release/ttxd ttxd-x86_64-linux-gnu
-          sha256sum ttxd-x86_64-linux-gnu > ttxd-x86_64-linux-gnu.sha256
+          cp target/release/ttx-inject ttx-inject-x86_64-linux-gnu
+          sha256sum ttx-inject-x86_64-linux-gnu > ttx-inject-x86_64-linux-gnu.sha256
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # release-please has already created the release; a hand-pushed tag has not.
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" ttxd-x86_64-linux-gnu ttxd-x86_64-linux-gnu.sha256 --clobber
+            gh release upload "$TAG" ttx-inject-x86_64-linux-gnu ttx-inject-x86_64-linux-gnu.sha256 --clobber
           else
-            gh release create "$TAG" ttxd-x86_64-linux-gnu ttxd-x86_64-linux-gnu.sha256 --verify-tag --generate-notes
+            gh release create "$TAG" ttx-inject-x86_64-linux-gnu ttx-inject-x86_64-linux-gnu.sha256 --verify-tag --generate-notes
           fi
 
   # The generator's container image, tagged with the release.
@@ -60,5 +61,14 @@ jobs:
       contents: read
       packages: write
     uses: ./.github/workflows/image.yml
+    with:
+      tag: ${{ inputs.tag || github.ref_name }}
+
+  # ttxd's container image, tagged with the release; the chart asks for it.
+  ttxd-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image-ttxd.yml
     with:
       tag: ${{ inputs.tag || github.ref_name }}

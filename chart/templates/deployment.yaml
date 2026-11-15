@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ttxd
+  labels:
+    {{- include "teletext.labels" . | nindent 4 }}
+    {{- include "teletext.ttxdSelector" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Never two at once: they would share the page store and fight over the injector.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "teletext.ttxdSelector" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "teletext.ttxdSelector" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      containers:
+        - name: ttxd
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.Version) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["/etc/ttxd/ttxd.toml"]
+          env:
+            - name: TZ
+              value: {{ .Values.timezone | quote }}
+            {{- range .Values.publishers }}
+            - name: {{ include "teletext.tokenEnv" .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.tokens.secretName }}
+                  key: {{ .tokenKey }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+            - name: link
+              containerPort: {{ .Values.link.port }}
+            {{- if .Values.public.enabled }}
+            - name: public
+              containerPort: {{ .Values.public.port }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /v1/status
+              port: http
+          livenessProbe:
+            httpGet:
+              path: /v1/status
+              port: http
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ttxd
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/ttxd
+      volumes:
+        - name: config
+          configMap:
+            name: ttxd
+        - name: data
+          persistentVolumeClaim:
+            claimName: ttxd-data

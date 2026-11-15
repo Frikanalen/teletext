@@ -23,16 +23,9 @@ pub struct Config {
     /// Network identification code in packet 8/30 (0 = none registered).
     #[serde(default)]
     pub network_id: u16,
-    /// Line numbers put in the five OP-47 descriptors.
-    #[serde(default = "default_lines")]
-    pub op47_lines: [u8; 5],
-    /// DeckLink device to output on, e.g. "DeckLink Duo (2)". Without it a 50 Hz timer
-    /// stands in for the frame clock (needs the `decklink` build feature).
-    pub decklink_device: Option<String>,
-    /// VANC line carrying the OP-47 packet.
-    #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
-    #[serde(default = "default_vanc_line")]
-    pub vanc_line: u32,
+    /// Where ttx-inject connects for frames, e.g. "0.0.0.0:4243". Without it, or while no
+    /// injector is connected, a 50 Hz timer stands in for the frame clock.
+    pub inject_listen: Option<String>,
     #[serde(default, rename = "publisher")]
     pub publishers: Vec<Publisher>,
 }
@@ -40,7 +33,11 @@ pub struct Config {
 #[derive(Debug, Deserialize, Clone)]
 pub struct Publisher {
     pub name: String,
+    #[serde(default)]
     pub token: String,
+    /// Read the token from this environment variable instead (e.g. from a Kubernetes Secret).
+    #[serde(default)]
+    pub token_env: Option<String>,
     /// Page ranges this publisher may write, e.g. ["200-29F", "888"].
     #[serde(default)]
     pub pages: Vec<String>,
@@ -63,14 +60,24 @@ fn default_name() -> String {
 fn default_initial_page() -> PageNo {
     PageNo::new(1, 0x00)
 }
-fn default_lines() -> [u8; 5] {
-    [7, 8, 9, 10, 11]
-}
-fn default_vanc_line() -> u32 {
-    9
-}
 fn default_flash() -> f64 {
     100.0
+}
+
+impl Config {
+    /// Fill in tokens given by `token_env`, and refuse publishers without a token.
+    pub fn resolve_tokens(&mut self) -> anyhow::Result<()> {
+        for p in &mut self.publishers {
+            if let Some(var) = &p.token_env {
+                p.token = std::env::var(var)
+                    .map_err(|_| anyhow::anyhow!("publisher {}: {var} is not set", p.name))?;
+            }
+            if p.token.is_empty() {
+                anyhow::bail!("publisher {} has no token", p.name);
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Publisher {
@@ -94,6 +101,7 @@ mod tests {
         let p = Publisher {
             name: "s".into(),
             token: "t".into(),
+            token_env: None,
             pages: vec!["200-29F".into(), "888".into()],
             subtitles: false,
             status_display: false,

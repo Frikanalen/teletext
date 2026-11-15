@@ -1,0 +1,13 @@
+# ttx-inject: the SDI side. Runs on the host with the DeckLink card.
+# ttxd's injector link (inject_listen in ttxd.toml).
+ttxd = "192.168.3.94:4243"
+# Without this, a 50 Hz timer stands in and nothing goes to SDI (for testing).
+decklink_device = "DeckLink Duo (2)"
+vanc_line = 9
+# Line numbers in the five OP-47 descriptors.
+op47_lines = [7, 8, 9, 10, 11]
+# Frames asked for ahead of the card; each is 20 ms of delay.
+buffer_frames = 2
+# After this long without frames from ttxd, replay the last full carousel cycle.
+replay_after_ms = 500
+max_cycle_secs = 120
