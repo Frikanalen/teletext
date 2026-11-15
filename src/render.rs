@@ -227,17 +227,25 @@ impl Ctx<'_> {
             let ptu = g.ptu().ok()?;
             return drcs_from_rows(&[ptu.to_vec()], 0);
         }
-        // Normal DRCS: the page the X/27/4 link names (DRCS link, slot 3).
-        let (_, _, raw) = self
-            .content
-            .extra
-            .iter()
-            .find(|(p, d, _)| (*p, *d) == (27, 4))?;
-        let w = words(raw);
-        let link = w.get(6).copied()?; // slot 3: triplets 6 (page) and 7 (subcode)
-        // libzvbi's reading: units in bits 7-10, tens in bits 15-17.
-        let num = ((link >> 7) & 15) as u8 | (((link >> 15) & 7) as u8) << 4;
-        let drcs_page = self.svc.pages.get(&PageNo::new(self.page.mag, num))?;
+        // Normal DRCS: the page named when this page was PUT (`drcs_page`, which goes
+        // out in the MOT), or else the one its X/27/4 link names (DRCS link, slot 3).
+        let named = self.svc.pages.get(&self.page).and_then(|p| p.drcs_page);
+        let no = match named {
+            Some(no) => no,
+            None => {
+                let (_, _, raw) = self
+                    .content
+                    .extra
+                    .iter()
+                    .find(|(p, d, _)| (*p, *d) == (27, 4))?;
+                let w = words(raw);
+                let link = w.get(6).copied()?; // slot 3: triplets 6 (page) and 7 (subcode)
+                // libzvbi's reading: units in bits 7-10, tens in bits 15-17.
+                let num = ((link >> 7) & 15) as u8 | (((link >> 15) & 7) as u8) << 4;
+                PageNo::new(self.page.mag, num)
+            }
+        };
+        let drcs_page = self.svc.pages.get(&no)?;
         let content = if drcs_page.subpages.len() > 1 {
             drcs_page.subpages.get((sub as usize).checked_sub(1)?)?
         } else {
@@ -753,5 +761,29 @@ mod tests {
         let rgb = render(&s, no, 0, Level::L1, &[b' '; 40]).unwrap();
         assert_eq!(px(&rgb, 10 * CELL_W + 5, CELL_H + 5), [0, 0, 0]);
         assert!(png(&rgb, 1).starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn own_drcs_page_is_the_one_the_page_names() {
+        let mut c = Content::from_markup(&["{red}Logo".into()]).unwrap();
+        c.set_x26(vec![(41, 0x04, 0), (10, 0x0D, 0x40)]).unwrap();
+        let mut s = svc_with(c);
+        let (no, drcs) = (PageNo::new(2, 0), PageNo::new(2, 0x0F));
+        // One tile, every pixel lit.
+        let tiles = Content {
+            rows: vec![vec![0x7F; 40]],
+            ..Default::default()
+        };
+        s.pages.insert(
+            drcs,
+            StoredPage::new("t", vec![tiles], 10, None, SystemTime::now()),
+        );
+        let at = |s: &Service| {
+            let rgb = render(s, no, 0, Level::L25, &[b' '; 40]).unwrap();
+            px(&rgb, 10 * CELL_W + 5, CELL_H + 5)
+        };
+        assert_eq!(at(&s), [0, 0, 0]);
+        s.pages.get_mut(&no).unwrap().drcs_page = Some(drcs);
+        assert_eq!(at(&s), [255, 0, 0]);
     }
 }

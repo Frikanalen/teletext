@@ -54,6 +54,14 @@ page (see `teletext_pages/level25.py`):
   colour table 0, so they still match the remote.
 - Set `level25 = false` under `[index]` to send a plain Level 1 page.
 
+## Ticker
+
+The row above the colour keys scrolls the programmes after the next one ("SENERE").
+ttxd moves it from its own clock (`tickers` in docs/api.md), at 4 cells a second, which
+costs the publisher about 8 packets a second of its flash budget; the generator only
+sends the text, and sends the page again when that changes. Set `ticker = false`
+under `[index]` to leave it out.
+
 Level 2.5 DRCS is one bit per pixel and a cell has one foreground colour, so the logo
 cannot be anti-aliased there. The four-colour DRCS that could do it is Level 3.5.
 

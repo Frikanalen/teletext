@@ -118,7 +118,8 @@ Each step goes out as a row update (the header and the changed rows, no erase), 
 screen doesn't blank. It counts against the publisher's flash budget: a ticker at 6
 cells/s costs about 12 packets/s. Over budget, steps are delayed, not dropped. Motion
 runs on the subpage on screen, stops while the page is expired, and starts again from
-the beginning when the page is PUT again. The web viewer's feed gets the moving rows as
+the beginning when the page is PUT with different `tickers` or `animation`; a PUT that
+leaves them as they were keeps its place. The web viewer's feed gets the moving rows as
 `page` events, at most 4 a second.
 
 #### Level 2.5 data
