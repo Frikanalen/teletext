@@ -3,6 +3,7 @@
 //!   GET    /v1/status
 //!   GET    /v1/pages                     list pages
 //!   GET    /v1/pages/{page}              page with a plain-text preview
+//!   GET    /v1/pages/{page}.png          drawn preview ?level=1|1.5|2.5&subpage=N&scale=1-4
 //!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets, links, palette, cells, place},...], cycle_secs?, ttl_secs?, flash?, flags?}
 //!   DELETE /v1/pages/{page}
 //!   POST   /v1/pages/{page}/flash        replace rows now {rows:{"5":"text"}, subpage?}
@@ -17,9 +18,11 @@ use crate::assets::{Assets, Layout, Palette};
 use crate::config::Publisher;
 use crate::enhance::{Cell, Enhancements, Links, Place};
 use crate::page::{Content, PageNo, Triplet};
+use crate::render::Level;
 use crate::service::{PageFlags, Service, StoredPage};
-use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -115,8 +118,46 @@ async fn list_pages(State(st): State<AppState>) -> Json<Value> {
     Json(json!({ "pages": pages }))
 }
 
-async fn get_page(State(st): State<AppState>, Path(page): Path<String>) -> ApiResult {
-    let no = parse_page(&page)?;
+#[derive(Deserialize)]
+struct PreviewQuery {
+    level: Option<String>,
+    #[serde(default)]
+    subpage: usize,
+    scale: Option<usize>,
+}
+
+/// `GET /v1/pages/{page}.png`: the page drawn as a decoder would show it.
+fn preview_png(st: &AppState, page: &str, q: &PreviewQuery) -> Result<Response, ApiError> {
+    let no = parse_page(page)?;
+    let level: Level = q
+        .level
+        .as_deref()
+        .unwrap_or("2.5")
+        .parse()
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let scale = q.scale.unwrap_or(1).clamp(1, 4);
+    let svc = st.svc.lock().unwrap();
+    let row0 = crate::render::header_row(no, &svc.header_text(chrono::Local::now()));
+    let rgb = crate::render::render(&svc, no, q.subpage, level, &row0)
+        .ok_or_else(|| err(StatusCode::NOT_FOUND, "no such page or subpage"))?;
+    drop(svc);
+    let body = crate::render::png(&rgb, scale);
+    Ok(([(header::CONTENT_TYPE, "image/png")], body).into_response())
+}
+
+async fn get_page(
+    State(st): State<AppState>,
+    Path(page): Path<String>,
+    Query(q): Query<PreviewQuery>,
+) -> Result<Response, ApiError> {
+    if let Some(p) = page.strip_suffix(".png") {
+        return preview_png(&st, p, &q);
+    }
+    get_page_json(&st, &page).map(IntoResponse::into_response)
+}
+
+fn get_page_json(st: &AppState, page: &str) -> ApiResult {
+    let no = parse_page(page)?;
     let svc = st.svc.lock().unwrap();
     let p = svc
         .pages

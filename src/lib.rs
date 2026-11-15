@@ -16,4 +16,5 @@ pub mod link;
 pub mod op47;
 pub mod p830;
 pub mod page;
+pub mod render;
 pub mod service;
