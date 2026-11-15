@@ -177,6 +177,22 @@ and `expired`. Times are Unix seconds.
 Returns the page's settings plus `preview`: for each subpage, 24 plain-text rows with
 attributes shown as spaces. Use it to check that your layout fits.
 
+### `GET /pages/{page}.png`: drawn preview
+
+The page as a decoder would show it, as a PNG of 480×500 pixels (12×20 a cell, so it
+looks right shown about 4:3). Query parameters:
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `level` | `2.5` | `1` (rows only), `1.5` (plus X/26 characters, e.g. Æ/Ø) or `2.5` (palettes, colours, DRCS glyphs, shared objects) |
+| `subpage` | 0 | which subpage, 0-based |
+| `scale` | 1 | 1–4, whole-pixel enlargement |
+
+It uses the same composition rules as the web viewer, which is checked cell for cell
+against libzvbi. A render of page 100 (palette, sky gradient, DRCS logo) matches libzvbi
+in every cell. Not drawn: G3 smooth mosaics (shown hatched), flashing (shown on), side
+panels.
+
 ### `GET /status`
 
 `{"pages": n, "stats": {"frames", "carousel_packets", "flash_packets", "subtitle_packets", "filler_packets", "service_data_packets"}}`.

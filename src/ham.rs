@@ -55,7 +55,6 @@ pub fn ham2418(d: u32) -> [u8; 3] {
     out
 }
 
-#[cfg(test)]
 /// Decode a Hamming 24/18 word, without correction. Returns None if any parity check fails.
 pub fn unham2418(b: [u8; 3]) -> Option<u32> {
     let bit = |pos: usize| (b[(pos - 1) / 8] >> ((pos - 1) % 8)) & 1;

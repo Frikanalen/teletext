@@ -192,7 +192,7 @@ impl Palette {
 impl Glyph {
     /// 20 bytes of PTU data: per pixel row, 6 pixels then 6 pixels, leftmost in bit 5,
     /// bit 6 always set. Without parity.
-    fn ptu(&self) -> Result<[u8; 20], String> {
+    pub(crate) fn ptu(&self) -> Result<[u8; 20], String> {
         if self.rows.len() != GLYPH_H || self.rows.iter().any(|r| r.chars().count() != GLYPH_W) {
             return Err(format!(
                 "glyph {:?} must be {GLYPH_H} rows of {GLYPH_W} characters",
