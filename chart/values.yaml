@@ -78,8 +78,9 @@ pages:
     tag: ""
     pullPolicy: IfNotPresent
   publisher: pages
-  # django-api's schedule. In the cluster that is the API Service, not the site.
-  apiUrl: http://django-api.default.svc.cluster.local:8080/api
+  # django-api's schedule. Production's, from every cluster: teletext shows what is
+  # really on air, also on staging.
+  apiUrl: https://frikanalen.tv/api
   pollSecs: 30
   refreshSecs: 120
   ttlSecs: 600
