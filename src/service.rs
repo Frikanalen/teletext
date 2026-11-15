@@ -383,11 +383,11 @@ impl Service {
     fn pick(&mut self, now: SystemTime, header: &[u8; 32]) -> Option<(Tier, Packet)> {
         for tier in [Tier::Subtitle, Tier::Flash, Tier::Carousel] {
             // End finished pages ahead of carousel packets.
-            if tier == Tier::Carousel {
-                if let Some(p) = self.terminator(header) {
-                    self.stats.filler_packets += 1;
-                    return Some((Tier::Carousel, p));
-                }
+            if tier == Tier::Carousel
+                && let Some(p) = self.terminator(header)
+            {
+                self.stats.filler_packets += 1;
+                return Some((Tier::Carousel, p));
             }
             // Continue a page in progress.
             if let Some(i) = self.inflight.iter().position(|u| u.tier == tier) {
