@@ -1,0 +1,28 @@
+name: Release
+# Tag vX.Y.Z on main to publish a ttxd binary with DeckLink output.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    # Same Ubuntu release as sdi-test1, so the glibc matches.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check the tag matches Cargo.toml
+        run: |
+          v=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "v$v" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME but Cargo.toml says $v"; exit 1; }
+      - run: cargo test --locked
+      - run: cargo build --release --locked --features decklink
+      - name: Package
+        run: |
+          cp target/release/ttxd ttxd-x86_64-linux-gnu
+          sha256sum ttxd-x86_64-linux-gnu > ttxd-x86_64-linux-gnu.sha256
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" ttxd-x86_64-linux-gnu ttxd-x86_64-linux-gnu.sha256 --generate-notes
