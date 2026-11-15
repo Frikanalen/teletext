@@ -87,6 +87,7 @@ class Pusher:
         cycle_secs: int = 10,
         flash: bool = True,
         repeat_secs: int | None = None,
+        drcs_page: str | None = None,
     ):
         self.ttxd = ttxd
         self.page = page
@@ -97,6 +98,7 @@ class Pusher:
         self.cycle_secs = cycle_secs
         self.flash = flash
         self.repeat_secs = repeat_secs
+        self.drcs_page = drcs_page
         self.sent: list | None = None
         self.sent_at = 0.0
 
@@ -127,6 +129,7 @@ class Pusher:
                     flash=flash,
                     flags=self.flags,
                     repeat_secs=self.repeat_secs,
+                    drcs_page=self.drcs_page,
                 )
                 self.sent_at = self.clock()
                 log.info("page %s sent%s", self.page, " with flash" if flash else "")
@@ -151,6 +154,26 @@ class IndexGenerator:
             weather.Forecast(cfg.index.latitude, cfg.index.longitude) if cfg.index.weather else None
         )
         self.weather = sky.Weather()
+        # Shared objects ttxd holds for us, by name; None until it has taken them.
+        self.shared: dict | None = None
+        self.shared_at = 0.0
+
+    def share_assets(self, clock=time.monotonic) -> None:
+        """Keep the logo in ttxd as a shared object, so placing it costs the page two
+        triplets. Without it (an older ttxd, or a token that may not set assets) the
+        page carries the logo itself."""
+        if self.shared is not None and clock() - self.shared_at < self.cfg.refresh_secs:
+            return
+        try:
+            self.shared = self.ttxd.put_assets(index.assets())
+            self.shared_at = clock()
+        except TtxdError as e:
+            if self.shared is not None or not self.shared_at:
+                log.warning(
+                    "shared assets: %s; page %s carries its own logo", e, self.cfg.index.page
+                )
+            self.shared = None
+            self.shared_at = clock()
 
     def refresh(self) -> None:
         try:
@@ -181,7 +204,7 @@ class IndexGenerator:
         """The index subpage as sent to ttxd."""
         current, upcoming = schedule.now_and_next(self.items, at)
         entries = directory(self.cfg.index, self.live_pages)
-        return index.page(self.cfg.index, current, upcoming, entries, self.look(at))
+        return index.page(self.cfg.index, current, upcoming, entries, self.look(at), self.shared)
 
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)
@@ -217,7 +240,13 @@ def main(argv: list[str] | None = None) -> int:
     if not cfg.token:
         log.error("no ttxd token: set TTXD_TOKEN or token in %s", args.config)
         return 2
-    pusher = Pusher(ttxd, cfg.index.page, cfg.ttl_secs, cfg.refresh_secs)
+    pusher = Pusher(
+        ttxd,
+        cfg.index.page,
+        cfg.ttl_secs,
+        cfg.refresh_secs,
+        drcs_page=cfg.index.drcs_page if cfg.index.level25 else None,
+    )
     # The logo's DRCS page: hidden (inhibit display), one subpage per 48 tiles. It
     # goes round at most every DRCS_REPEAT_SECS, so a decoder has every subpage after
     # that many seconds per subpage.
@@ -240,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         now = datetime.now(schedule.OSLO)
         if cfg.index.level25:
             drcs.push(tuple(logo().drcs_subpages()))
+            gen.share_assets()
         pusher.push(gen.page(now))
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
         time.sleep(max(delay, 0.1))

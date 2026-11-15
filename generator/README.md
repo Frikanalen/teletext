@@ -34,14 +34,22 @@ page (see `teletext_pages/level25.py`):
 - **Sky.** Each of the sky's eight rows gets its own colour (an X/26 full row colour
   and background), a gradient that follows the sun: near black at night, plum to red
   at dusk, cooler and pinker at dawn, blue by day, and greyer under cloud.
-- **Logo.** The mark (`assets/mark.ppm`, 62x50 teletext pixels) and the wordmark
+- **Logo.** The mark (`assets/mark.ppm`, 56x45 teletext pixels) and the wordmark
   (`assets/wordmark.ppm`, 355x27) are cut into 12x10 tiles and drawn over the block
   logo on rows 8-12. The tiles go on a hidden DRCS page (`drcs_page`, default `10F`),
-  48 per subpage and each row from one subpage; X/26 triplets place them and blank the
-  mosaic cells the real logo doesn't cover. The DRCS page goes round at most every 8
+  48 per subpage and each row from one subpage. The logo itself is a shared object in
+  ttxd (`PUT /assets`, which needs a token with `assets = true`): the page places it
+  with two X/26 triplets, and so can any other page that names the same `drcs_page`.
+  With a token that may not set assets the page carries the logo cell by cell instead,
+  which uses most of its X/26 room. The DRCS page goes round at most every 8
   seconds (ttxd's `repeat_secs`), so a TV that tunes in has the whole logo within
   about half a minute. `tools/logo_assets.py` draws both assets from the logo's vector
   paths: a pixel is on when the shape covers half of it or more.
+- **Finer shapes.** With the logo out of the way there is room for shared glyphs
+  (ttxd's global DRCS page): the slanted ends of the heading tabs and key chips become
+  straight diagonals, and the sky's lone stars, raindrops and snowflakes are drawn as
+  such instead of as blocks. This generator owns ttxd's shared assets: a `PUT /assets`
+  replaces them all.
 - **Colour keys.** The chips are forced to the standard red, green, yellow and cyan of
   colour table 0, so they still match the remote.
 - Set `level25 = false` under `[index]` to send a plain Level 1 page.

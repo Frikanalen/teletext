@@ -11,7 +11,10 @@ shows the plain page and a Level 2.5 decoder shows the enhanced one:
   character on a DRCS page (a hidden page with up to 48 tiles per subpage), and X/26
   triplets on the display page put those characters into cells, each with its own
   colour from the palette.
-- **X/27/4** links the display page to its DRCS page.
+- The display page names its DRCS page when it is sent (``drcs_page``), and ttxd lists
+  it in the magazine's MOT, where a decoder looks for it.
+- **Shared objects.** A graphic can also be kept in ttxd as an object (``PUT /assets``)
+  that any page places with two triplets, instead of carrying it cell by cell.
 
 The bit layouts follow ETS 300 706 as implemented by libzvbi (src/packet.c and
 src/teletext.c), which ``tools/t42render.c`` uses to check the result.
@@ -108,27 +111,6 @@ def x28_drcs() -> list[Triplet]:
     b.put(0, 11)  # reserved
     for _ in range(TILES_PER_DRCS_SUBPAGE):
         b.put(0, 4)  # mode 0: 12x10x1
-    return b.triplets()
-
-
-def x27_drcs_link(drcs_page: str) -> list[Triplet]:
-    """X/27/4 linking a display page to its normal DRCS page (same magazine, subpage
-    chosen by the DRCS mode triplet). Links: 0 GPOP, 1 POP, 2 GDRCS, 3 DRCS. The DRCS
-    page also goes in link 1, which is where libzvbi looks for it.
-
-    The DRCS page number must have tens digit 0 (e.g. 10F): libzvbi and our reading of
-    the spec place the tens and magazine bits differently, and only a 0 there reads
-    the same either way."""
-    num = int(drcs_page[1:], 16)
-    if num >> 4:
-        raise ValueError(f"DRCS page {drcs_page}: tens digit must be 0")
-    link = 3 | 3 << 2 | (num & 15) << 7  # function bits set later, valid at 2.5 and 3.5
-    none = 3 << 2 | 0xFF << 7  # page xFF: no link
-    b = Bits()
-    for slot, function in enumerate((0, 1, 2, 3)):
-        word = (link if slot in (1, 3) else none) & ~3 | function
-        b.put(word, 18)  # page number
-        b.put(0, 18)  # subcode
     return b.triplets()
 
 
@@ -277,6 +259,60 @@ class Graphic:
                 out.append((col, 0x0D, 0x40 | tile % TILES_PER_DRCS_SUBPAGE))
             out.extend(pending)
         return out
+
+    def object_x26(self, blank: set[tuple[int, int]] = frozenset()) -> list[Triplet]:
+        """The graphic as a shared object's triplets (``PUT /assets``), placed with its
+        top left cell where the object is invoked. Rows and columns count from there:
+        row address 40 + n is n rows down. ``blank`` is as for :meth:`x26`. The page
+        that places the object must link to the DRCS page itself."""
+        top = min(r for r, _ in self.cells)
+        left = min(c for _, c in self.cells)
+        several = len(self.tiles) > TILES_PER_DRCS_SUBPAGE
+        spaces = {cell for cell in blank if cell not in self.cells}
+        out: list[Triplet] = []
+        subcode = 0
+        for row in sorted({r for r, _ in self.cells} | {r for r, _ in spaces}):
+            if row > top:
+                out.append((40 + row - top, 0x04, 0))
+            (subpage,) = {
+                t // TILES_PER_DRCS_SUBPAGE for (r, _), (t, _) in self.cells.items() if r == row
+            } or {subcode - several}
+            if subpage + several != subcode:
+                subcode = subpage + several
+                out.append((40 + row - top, 0x18, 0x40 | subcode))
+            colour = None
+            for col in sorted(c for r, c in self.cells.keys() | spaces if r == row):
+                if (row, col) in spaces:
+                    out.append((col - left, 0x09, 0x20))
+                    continue
+                tile, pal = self.cells[(row, col)]
+                if pal != colour:
+                    out.append((col - left, 0x00, pal))
+                    colour = pal
+                out.append((col - left, 0x0D, 0x40 | tile % TILES_PER_DRCS_SUBPAGE))
+        return out
+
+
+def page_x26(
+    extra: dict[int, list[Triplet]],
+    row_colours: dict[int, int] | None = None,
+    place: dict[tuple[int, int], Triplet] | None = None,
+) -> list[Triplet]:
+    """X/26 triplets for a page that draws with shared objects: ``extra`` and
+    ``row_colours`` as for :meth:`Graphic.x26`, and ``place`` puts an object (its
+    invocation triplet, from ``PUT /assets``) with its top left cell at (row, column)."""
+    row_colours = row_colours or {}
+    place = place or {}
+    out: list[Triplet] = []
+    for row in sorted(set(extra) | set(row_colours) | {r for r, _ in place}):
+        if row in row_colours:
+            out.append((row_address(row), 0x01, row_colours[row]))
+        out.append((row_address(row), 0x04, 0))
+        out.extend(sorted(extra.get(row, [])))
+        for (r, col), invocation in sorted(place.items()):
+            if r == row:
+                out += [(row_address(row), 0x04, col), invocation]
+    return out
 
 
 def tile_bytes(bits: list[list[bool]]) -> tuple[int, ...]:

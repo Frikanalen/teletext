@@ -13,6 +13,7 @@ as it is tall on a 4:3 screen.
 """
 
 import functools
+import re
 from dataclasses import dataclass, field
 
 from .markup import COLS
@@ -161,3 +162,36 @@ def _encode(wanted: tuple, plain: bool) -> str:
         path, token = path
         tokens.append(token)
     return "".join(reversed(tokens)).rstrip(" ")
+
+
+def shown(row: str) -> list[tuple[int | None, int, int]]:
+    """What a Level 1 decoder shows for a row of markup: per cell, the mosaic's bits
+    (0 for a blank cell, None for a letter), its foreground and its background."""
+    codes = {n: i for i, n in enumerate(NAMES)}
+    gfx, fg, bg, hold, held = False, WHITE, BLACK, False, 0
+    out: list[tuple[int | None, int, int]] = []
+    for token in re.findall(r"\{[^{}]*\}|.", row):
+        name = token[1:-1] if token.startswith("{") else None
+        bits: int | None = 0
+        if name == "newbg":
+            bg = fg
+        elif name == "blackbg":
+            bg = BLACK
+        elif name == "hold":
+            hold = True
+        if name is None:
+            bits = 0 if token == " " else None
+        elif name.startswith("x:"):
+            bits = held = bytes.fromhex(name[2:])[0] - 0x20
+        elif hold and gfx:
+            bits = held
+        out.append((bits, fg, bg))
+        if name in codes:
+            gfx, fg, held = False, codes[name], 0
+        elif name and name[0] == "g" and name[1:] in codes:
+            if not gfx:
+                held = 0
+            gfx, fg = True, codes[name[1:]]
+        elif name == "release":
+            hold = False
+    return out + [(0, fg, bg)] * (COLS - len(out))

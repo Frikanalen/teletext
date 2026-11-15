@@ -28,7 +28,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from . import level25, sky
+from . import art, level25, sky
 from .art import BLACK, BLUE, CYAN, GREEN, MAGENTA, RED, WHITE, YELLOW, Picture
 from .fastext import x27_0
 from .markup import COLS, ROWS, check, fit, plain, wrap
@@ -68,6 +68,8 @@ LOGO_ROW, LOGO_COL, WORD_COL, WORD_TOP = 8, 2, 9, 3
 # Where the mark goes in that, in pixels. A cell has one colour, and from here the
 # blades fall in cells of their own but for a few pixels.
 MARK_AT = (3, 5)
+# The logo as a shared object in ttxd (PUT /assets), for any page to place.
+LOGO_OBJECT = "logo"
 LOGO_ROWS = range(7, 12)  # 0-based rows the logo touches
 # Colour table 2 on a Level 2.5 decoder, in the order of the Level 1 colours it
 # stands in for: black, red, green, yellow, blue, magenta, cyan, white.
@@ -203,8 +205,19 @@ def picture(
     entries: list[Entry],
     at: sky.Look,
 ) -> Picture:
+    return _picture(cfg, current, upcoming, entries, at)[0]
+
+
+def _picture(
+    cfg: IndexConfig,
+    current: Programme | None,
+    upcoming: Programme | None,
+    entries: list[Entry],
+    at: sky.Look,
+) -> tuple[Picture, dict[tuple[int, int], str]]:
+    """The page as a picture, and the sky's stars, drops and flakes (see sky.draw)."""
     pic = Picture(ROWS)
-    sky.draw(pic, at)
+    small = sky.draw(pic, at)
     pic.text(0, 1, fit(plain(cfg.footer), 16), WHITE)
     pic.text(0, COLS - 9, "TEKST-TV", CYAN)
     _logo(pic, cfg.tagline)
@@ -214,7 +227,7 @@ def picture(
     _programme(pic, NOW_ROW, "NÅ PÅ FRIKANALEN", current, flash=True)
     _programme(pic, NEXT_ROW, "DERETTER", upcoming, flash=False)
     _buttons(pic, entries)
-    return pic
+    return pic, small
 
 
 def render(
@@ -246,6 +259,127 @@ def logo() -> level25.Graphic:
     pic.paste(mark, *MARK_AT)
     pic.paste(word, (WORD_COL - LOGO_COL) * level25.TILE_W, level25.TILE_H + WORD_TOP)
     return level25.make_graphic(pic, LOGO_ROW, LOGO_COL, PALETTE, level25.BRAND[0])
+
+
+def _slant(y: int) -> int:
+    """How many of a cell's 12 pixels are lit in pixel row ``y`` of a slant that runs
+    from a full top third to an empty bottom third, as the sixels 11/10/00 do."""
+    return max(0, min(12, round(12 - (y - 1.5) * 12 / 7)))
+
+
+def _glyph(lit) -> list[str]:
+    return ["".join("#" if lit(x, y) else "." for x in range(12)) for y in range(10)]
+
+
+# Shared glyphs: finer versions of what the Level 1 page draws with sixels. The four
+# slants are named after the mosaic they stand in for (its bits, see art._BITS).
+SLANTS = {
+    0b0000111: ("slant-ul", lambda x, y: x < _slant(y)),
+    0b1011000: ("slant-lr", lambda x, y: x >= _slant(y)),
+    0b0001011: ("slant-ur", lambda x, y: 11 - x < _slant(y)),
+    0b1010100: ("slant-ll", lambda x, y: 11 - x >= _slant(y)),
+}
+SMALL_GLYPHS = {
+    "star-0": [
+        "............",
+        ".....#......",
+        ".....#......",
+        "....###.....",
+        ".#########..",
+        "....###.....",
+        ".....#......",
+        ".....#......",
+        "............",
+        "............",
+    ],
+    "star-1": [
+        "............",
+        "............",
+        "............",
+        ".....#......",
+        "...#####....",
+        ".....#......",
+        "............",
+        "............",
+        "............",
+        "............",
+    ],
+    "star-2": ["............"] * 4 + ["....##......"] + ["............"] * 5,
+    "rain": [
+        "............",
+        "........##..",
+        ".......##...",
+        ".......##...",
+        "......##....",
+        ".....##.....",
+        ".....##.....",
+        "....##......",
+        "............",
+        "............",
+    ],
+    "snow": [
+        ".....#......",
+        "..#..#..#...",
+        "...#.#.#....",
+        "....###.....",
+        ".#########..",
+        "....###.....",
+        "...#.#.#....",
+        "..#..#..#...",
+        ".....#......",
+        "............",
+    ],
+}
+SMALL_COLOURS = {"star": WHITE, "rain": CYAN, "snow": WHITE}
+
+
+def assets() -> dict:
+    """The shared Level 2.5 assets this generator keeps in ttxd: the logo as an object
+    (its tiles stay on the DRCS page, which a page placing it must name as its
+    ``drcs_page``), and glyphs for slanted edges, stars, rain and snow."""
+    x26 = logo().object_x26(_block_logo_cells())
+    glyphs = [{"name": name, "rows": _glyph(lit)} for name, lit in SLANTS.values()]
+    glyphs += [{"name": name, "rows": rows} for name, rows in SMALL_GLYPHS.items()]
+    return {
+        "glyphs": glyphs,
+        "objects": [{"name": LOGO_OBJECT, "type": "adaptive", "x26": x26}],
+    }
+
+
+def _finer(
+    rows: list[str], small: dict[tuple[int, int], str], glyphs: dict[str, int]
+) -> tuple[dict[int, list[level25.Triplet]], dict[int, list[level25.Triplet]]]:
+    """Shared glyphs over cells of the Level 1 page, as X/26 triplets by display row:
+    first the slanted ends of the heading tabs and the key chips, then the sky's
+    stars, drops and flakes. A glyph takes the colours the cell already has, so only
+    cells whose mosaic is nothing but that shape qualify."""
+    slants: dict[int, list[level25.Triplet]] = {}
+    for row in (NOW_ROW, NEXT_ROW, BUTTON_ROW):
+        for col, (bits, _, _) in enumerate(art.shown(rows[row])):
+            if bits in SLANTS and SLANTS[bits][0] in glyphs:
+                slants.setdefault(row + 1, []).append((col, 0x0D, glyphs[SLANTS[bits][0]]))
+    # A chip's right end is a whole cell of its colour on Level 1 (the next chip's
+    # colour attribute sits there). Cut the slant out of it in the page's ink.
+    if "slant-lr" in glyphs:
+        for col, (bits, _, bg) in enumerate(art.shown(rows[BUTTON_ROW])):
+            if col % CHIP_WIDTH == CHIP_WIDTH - 1 and bits == 0 and bg != BLACK:
+                cut = [(col, 0x00, level25.INK), (col, 0x0D, glyphs["slant-lr"])]
+                slants.setdefault(BUTTON_ROW + 1, []).extend(cut)
+        slants.get(BUTTON_ROW + 1, []).sort()
+    sky_cells: dict[int, list[level25.Triplet]] = {}
+    for row in range(sky.ROWS):
+        for col, (bits, fg, bg) in enumerate(art.shown(rows[row])):
+            if not bits or bg != BLACK:
+                continue
+            lit = [(col * 2 + x, row * 3 + y) for x, y, bit in art._BITS if bits & bit]
+            kinds = {small.get(at) for at in lit}
+            if len(kinds) != 1 or None in kinds:
+                continue
+            (kind,) = kinds
+            name = f"star-{(lit[0][0] * 7 + lit[0][1] * 3) % 3}" if kind == "star" else kind
+            if fg == SMALL_COLOURS[kind] and name in glyphs:
+                sky_cells.setdefault(row + 1, []).append((col, 0x0D, glyphs[name]))
+    return slants, sky_cells
 
 
 def _block_logo_cells() -> set[tuple[int, int]]:
@@ -285,7 +419,21 @@ def _key_colours(rows: list[str]) -> dict[int, list[level25.Triplet]]:
     return out
 
 
-def enhancements(cfg: IndexConfig, rows: list[str], at: sky.Look) -> dict:
+def _merge(*parts: dict[int, list[level25.Triplet]]) -> dict[int, list[level25.Triplet]]:
+    out: dict[int, list[level25.Triplet]] = {}
+    for part in parts:
+        for row, triplets in part.items():
+            out.setdefault(row, []).extend(triplets)
+    return out
+
+
+def enhancements(
+    cfg: IndexConfig,
+    rows: list[str],
+    at: sky.Look,
+    shared: dict | None = None,
+    small: dict[tuple[int, int], str] | None = None,
+) -> dict:
     """Level 2.5 data for page 100: the palette with the sky's colours, the sky's
     gradient, the link to the DRCS page, and the logo. ``rows`` is the page's markup."""
     # One colour per sky row, as the row colour and as the background from column 0.
@@ -300,19 +448,39 @@ def enhancements(cfg: IndexConfig, rows: list[str], at: sky.Look) -> dict:
             if token == "{blackbg}":
                 backgrounds[row].append((col, 0x03, colour))
     keys = _key_colours(rows)
-    blank = _block_logo_cells()
-    x26 = logo().x26(extra=backgrounds | keys, blank=blank, row_colours=row_colours)
-    if len(x26) > MAX_TRIPLETS:
-        # Too busy a sky: keep the gradient where no background attribute cuts it.
-        plain_sky = {row: triplets[:1] for row, triplets in backgrounds.items()}
-        x26 = logo().x26(extra=plain_sky | keys, blank=blank, row_colours=row_colours)
+    objects = (shared or {}).get("objects", {})
+    if LOGO_OBJECT in objects:
+        # The logo is a shared object: two triplets, wherever it is placed. That
+        # leaves room to draw slants and the sky's small things with shared glyphs.
+        place = {(LOGO_ROW, LOGO_COL): tuple(objects[LOGO_OBJECT])}
+        slants, sky_cells = _finer(rows, small or {}, shared.get("glyphs", {}))
+        budget = MAX_TRIPLETS - len(
+            level25.page_x26(_merge(backgrounds, keys, slants), row_colours, place)
+        )
+        for row in sorted(sky_cells):
+            # Each row costs its glyphs; stop when the packets are full.
+            if len(sky_cells[row]) > budget:
+                break
+            budget -= len(sky_cells[row])
+            slants = _merge(slants, {row: sky_cells[row]})
+        keys = _merge(keys, slants)
+        # libzvbi loses the row's background in the cell before a placement unless
+        # it is set again there.
+        backgrounds[LOGO_ROW].append((LOGO_COL - 1, 0x03, SKY_COLOUR + LOGO_ROW - 1))
+        x26 = level25.page_x26(_merge(backgrounds, keys), row_colours, place)
+    else:
+        blank = _block_logo_cells()
+        x26 = logo().x26(extra=backgrounds | keys, blank=blank, row_colours=row_colours)
+        if len(x26) > MAX_TRIPLETS:
+            # Too busy a sky: keep the gradient where no background attribute cuts it.
+            plain_sky = {row: triplets[:1] for row, triplets in backgrounds.items()}
+            x26 = logo().x26(extra=plain_sky | keys, blank=blank, row_colours=row_colours)
     palette = level25.x28_palette(sky.gradient(at), clut2=PALETTE)
     return {
         "x26": x26,
-        "packets": [
-            {"packet": 27, "designation": 4, "triplets": level25.x27_drcs_link(cfg.drcs_page)},
-            {"packet": 28, "designation": 0, "triplets": palette},
-        ],
+        # No X/27/4 link to the DRCS page: ttxd puts it in the magazine's MOT
+        # (drcs_page on the PUT), which leaves the MOT's global links in force.
+        "packets": [{"packet": 28, "designation": 0, "triplets": palette}],
     }
 
 
@@ -322,13 +490,15 @@ def page(
     upcoming: Programme | None,
     entries: list[Entry],
     at: sky.Look,
+    shared: dict | None = None,
 ) -> dict:
     """The index subpage as sent to ttxd: rows, the fastext links, and Level 2.5 data
     if enabled."""
-    rows = render(cfg, current, upcoming, entries, at)
+    pic, small = _picture(cfg, current, upcoming, entries, at)
+    rows = check(pic.markup())
     out = {"rows": rows, "packets": [fastext(cfg, entries)]}
     if cfg.level25:
-        extra = enhancements(cfg, rows, at)
+        extra = enhancements(cfg, rows, at, shared, small)
         out["x26"] = extra["x26"]
         out["packets"] += extra["packets"]
     return out
