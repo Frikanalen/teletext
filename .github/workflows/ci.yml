@@ -36,4 +36,4 @@ jobs:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
       - run: helm lint --strict chart
-      - run: helm template teletext chart --set link.service.loadBalancerIP=192.0.2.1 --set public.enabled=true
+      - run: helm template teletext chart --set link.service.loadBalancerIP=192.0.2.1 --set public.enabled=true --set pages.enabled=true

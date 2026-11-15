@@ -1,0 +1,61 @@
+{{- if .Values.pages.enabled }}
+{{- $p := .Values.pages }}
+# The studio page generator. Stateless: it rebuilds its pages from the schedule
+# and sends them again on start, so one replica that restarts is enough.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ttx-pages
+  labels:
+    {{- include "teletext.labels" . | nindent 4 }}
+    app.kubernetes.io/name: ttx-pages
+spec:
+  replicas: 1
+  # Two generators would both push page 100; don't overlap.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ttx-pages
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ttx-pages
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/pages-configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+      containers:
+        - name: ttx-pages
+          image: "{{ $p.image.repository }}:{{ $p.image.tag | default (printf "v%s" .Chart.Version) }}"
+          imagePullPolicy: {{ $p.image.pullPolicy }}
+          args: ["/etc/ttx-pages/pages.toml"]
+          env:
+            - name: TZ
+              value: {{ .Values.timezone | quote }}
+            - name: TTXD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.tokens.secretName }}
+                  key: {{ $p.publisher }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            {{- toYaml $p.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/ttx-pages
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: ttx-pages
+{{- end }}
