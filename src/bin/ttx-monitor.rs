@@ -7,7 +7,9 @@
 use ttxd::monitor::{Analyzer, stream};
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .init();
     let mut args = std::env::args().skip(1);
     let url = args
         .next()
