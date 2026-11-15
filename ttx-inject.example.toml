@@ -7,6 +7,9 @@ vanc_line = 9
 # OP-47 packets per frame, 1-3, 5 teletext lines each (all on vanc_line). More than 1
 # needs the encoding appliance in its multi-packet OP-47 mode.
 op47_packets = 1
+# Wrap each OP-47 packet in an ANC Multipacket (SDID 0x03), for an encoder set to its
+# "multi-packet" OP-47 mode. A multipacket holds one 5-line SDP.
+op47_multipacket = false
 # Line numbers in the OP-47 descriptors, 5 per packet. Default: 7 upwards.
 # op47_lines = [7, 8, 9, 10, 11]
 # Frames asked for ahead of the card; each is 20 ms of delay.

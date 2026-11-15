@@ -79,19 +79,19 @@ public:
     std::vector<Slot> slots;
     uint8_t buf[1024];
 
-    // Refill a frame's packets from Rust and schedule it. Rust writes the SDPs back to
-    // back; byte 2 of each is its length.
+    // Refill a frame's packets from Rust and schedule it. Rust writes each ANC packet's
+    // user data words preceded by their count.
     HRESULT schedule(Slot& s) {
         size_t n = fill(user, buf, sizeof buf);
         s.anc->DetachAllPackets();
         size_t off = 0;
         for (AncPacket* p : s.packets) {
-            if (off + 3 > n) break;
-            size_t len = buf[off + 2];
-            if (len < 3 || off + len > n) break;
-            p->set(buf + off, len);
+            if (off + 1 > n) break;
+            size_t len = buf[off];
+            if (len == 0 || off + 1 + len > n) break;
+            p->set(buf + off + 1, len);
             s.anc->AttachPacket(p);
-            off += len;
+            off += 1 + len;
         }
         HRESULT r = out->ScheduleVideoFrame(s.frame, next, duration, scale);
         next += duration;
