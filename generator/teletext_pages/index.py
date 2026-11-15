@@ -404,14 +404,17 @@ def assets() -> dict:
 
 
 def _finer(
-    rows: list[str], small: dict[tuple[int, int], str], glyphs: dict[str, int]
+    rows: list[str],
+    small: dict[tuple[int, int], str],
+    glyphs: dict[str, int],
+    tab_rows: tuple[int, ...] = (NOW_ROW, NEXT_ROW),
 ) -> tuple[dict[int, list[level25.Triplet]], dict[int, list[Sprite]]]:
     """Shared glyphs over cells of the Level 1 page: first the slanted ends of the
     heading tabs and the key chips, as X/26 triplets by display row, then the sky's
     stars, drops and flakes as sprites by display row. A glyph takes the colours the
     cell already has, so only cells whose mosaic is nothing but that shape qualify."""
     slants: dict[int, list[level25.Triplet]] = {}
-    for row in (NOW_ROW, NEXT_ROW, BUTTON_ROW):
+    for row in (*tab_rows, BUTTON_ROW):
         for col, (bits, _, _) in enumerate(art.shown(rows[row])):
             if bits in SLANTS and SLANTS[bits][0] in glyphs:
                 slants.setdefault(row + 1, []).append((col, 0x0D, glyphs[SLANTS[bits][0]]))

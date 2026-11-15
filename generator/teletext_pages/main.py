@@ -15,9 +15,10 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from . import index, schedule, sky, weather
+from . import index, pages, schedule, sky, weather
 from .index import Entry, IndexConfig, directory, logo
 from .markup import COLS, preview
+from .pages import InfoConfig, ScheduleConfig, Section
 from .ttxd import Ttxd, TtxdError
 
 log = logging.getLogger("ttx-pages")
@@ -44,6 +45,9 @@ class Config:
     # If this generator stops, ttxd drops its pages after this long.
     ttl_secs: int = 600
     index: IndexConfig = field(default_factory=IndexConfig)
+    # The pages behind the index (tables [schedule] and [info]).
+    schedule_page: ScheduleConfig = field(default_factory=ScheduleConfig)
+    info_page: InfoConfig = field(default_factory=InfoConfig)
 
 
 def load_config(path: str) -> Config:
@@ -51,7 +55,17 @@ def load_config(path: str) -> Config:
         raw = tomllib.load(f)
     index = raw.pop("index", {})
     entries = [Entry(**e) for e in index.pop("entry", [])]
-    cfg = Config(**raw, index=IndexConfig(**index, entries=entries))
+    info = raw.pop("info", {})
+    sections = [Section(**s) for s in info.pop("section", [])]
+    if sections:
+        info["sections"] = sections
+    listing = raw.pop("schedule", {})
+    cfg = Config(
+        **raw,
+        index=IndexConfig(**index, entries=entries),
+        schedule_page=ScheduleConfig(**listing),
+        info_page=InfoConfig(**info),
+    )
     cfg.token = os.environ.get("TTXD_TOKEN", cfg.token)
     if cfg.refresh_secs >= cfg.ttl_secs:
         raise ValueError("refresh_secs must be shorter than ttl_secs")
@@ -244,6 +258,25 @@ class IndexGenerator:
             self.cfg.index, current, upcoming, entries, self.look(at), self.shared
         )
 
+    def schedule_pages(self, at: datetime) -> tuple[dict, ...]:
+        entries = directory(self.cfg.index, self.live_pages)
+        return pages.schedule_pages(
+            self.cfg.schedule_page, self.cfg.index, self.items, at, entries, self.shared
+        )
+
+    def info_pages(self) -> tuple[dict, ...]:
+        entries = directory(self.cfg.index, self.live_pages)
+        return pages.info_pages(self.cfg.info_page, self.cfg.index, entries, self.shared)
+
+    def more_pages(self, at: datetime) -> list[tuple[ScheduleConfig | InfoConfig, tuple]]:
+        """The enabled pages behind the index, each with its subpages."""
+        out = []
+        if self.cfg.schedule_page.enabled:
+            out.append((self.cfg.schedule_page, self.schedule_pages(at)))
+        if self.cfg.info_page.enabled:
+            out.append((self.cfg.info_page, self.info_pages()))
+        return out
+
     def tickers(self, at: datetime) -> list[dict]:
         return index.ticker(self.cfg.index, schedule.later(self.items, at))
 
@@ -275,7 +308,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         gen.refresh()
-        print_page(cfg.index.page, gen.rows(datetime.now(schedule.OSLO)))
+        now = datetime.now(schedule.OSLO)
+        print_page(cfg.index.page, gen.rows(now))
+        for page, subpages in gen.more_pages(now):
+            for n, sub in enumerate(subpages, 1):
+                print_page(f"{page.page} {n}/{len(subpages)}", sub["rows"])
         return 0
 
     if not cfg.token:
@@ -300,6 +337,19 @@ def main(argv: list[str] | None = None) -> int:
         cycle_secs=1,
         repeat_secs=DRCS_REPEAT_SECS,
     )
+    # The pages behind the index go round with the carousel: no flash.
+    more = {
+        page.page: Pusher(
+            ttxd,
+            page.page,
+            cfg.ttl_secs,
+            cfg.refresh_secs,
+            cycle_secs=page.cycle_secs,
+            flash=False,
+        )
+        for page in (cfg.schedule_page, cfg.info_page)
+        if page.enabled
+    }
     started = time.monotonic()
     while True:
         gen.refresh()
@@ -313,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
             gen.share_assets()
         page, animation = gen.animated_page(now)
         pusher.push(page, gen.tickers(now), animation)
+        for cfg_page, subpages in gen.more_pages(now):
+            more[cfg_page.page].push(subpages)
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
         time.sleep(max(delay, 0.1))
 

@@ -22,9 +22,23 @@ title = "Sendeplan"
 
 [[index.entry]]
 page = "300"
-title = "Oppslag fra medlemmene"
+title = "Info"
 
 [[index.entry]]
 page = "888"
 title = "Teksting"
 always = true
+
+# The programme schedule from now on, a subpage per 8 programmes. This is the page
+# to name as "programme schedule page" in the DVB teletext descriptor.
+[schedule]
+page = "200"
+
+# Information about the channel: the "additional information page". Without sections
+# here it carries a short text about Frikanalen.
+[info]
+page = "300"
+
+# [[info.section]]
+# heading = "Om Frikanalen"
+# text = "Frikanalen er sivilsamfunnets TV-kanal."
