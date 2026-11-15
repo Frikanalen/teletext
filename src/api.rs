@@ -4,7 +4,7 @@
 //!   GET    /v1/pages                     list pages
 //!   GET    /v1/pages/{page}              page with a plain-text preview
 //!   GET    /v1/pages/{page}.png          drawn preview ?level=1|1.5|2.5&subpage=N&scale=1-4
-//!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets, links, palette, cells, place},...], cycle_secs?, ttl_secs?, flash?, flags?}
+//!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets, links, palette, cells, place},...], cycle_secs?, ttl_secs?, flash?, flags?, tickers?, animation?}
 //!   DELETE /v1/pages/{page}
 //!   POST   /v1/pages/{page}/flash        replace rows now {rows:{"5":"text"}, subpage?}
 //!   GET    /v1/assets                    shared Level 2.5 assets and where they ended up
@@ -182,6 +182,11 @@ struct PutPage {
     flags: PageFlags,
     /// Send at most once per this many seconds (for data pages such as DRCS).
     repeat_secs: Option<u32>,
+    /// Rows that scroll right to left, driven by ttxd.
+    #[serde(default)]
+    tickers: Vec<crate::motion::Ticker>,
+    /// Rows that step through frames, driven by ttxd.
+    animation: Option<crate::motion::Animation>,
     /// The DRCS page with this page's own characters, for the magazine's MOT.
     drcs_page: Option<PageNo>,
 }
@@ -309,6 +314,14 @@ async fn put_page(
     );
     stored.flags = body.flags;
     stored.repeat_secs = body.repeat_secs;
+    for t in &body.tickers {
+        t.validate().map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    }
+    if let Some(a) = &body.animation {
+        a.validate().map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    }
+    stored.tickers = body.tickers;
+    stored.animation = body.animation;
     stored.drcs_page = body.drcs_page;
     let mut svc = st.svc.lock().unwrap();
     svc.put_page(no, stored, body.flash);

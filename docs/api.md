@@ -91,6 +91,36 @@ A PUT replaces the whole page, so it is idempotent: sending the same page again 
 nothing harmful. The reply is `{"page":"200","ok":true}`. Stored pages survive a ttxd
 restart.
 
+#### Tickers and animation
+
+ttxd can move rows itself, from its own frame clock, so a publisher sends the page once:
+
+```json
+{
+  "subpages": [["{yellow}Nyheter", "..."]],
+  "tickers": [
+    { "row": 24, "prefix": "{red}{newbg}{yellow}NYTT {blackbg}{white}",
+      "text": "Siste nytt fra Frikanalen ...", "cells_per_sec": 6 }
+  ],
+  "animation": {
+    "frame_ms": 250,
+    "frames": [ { "5": "{gred}{x:7F}" }, { "5": " {gred}{x:7F}" } ]
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `tickers` | rows whose `text` scrolls right to left at `cells_per_sec` (1–12, default 4), with `prefix` fixed at the left. Text that fits in the row stands still. Æ/Ø and other markup scroll along |
+| `animation` | rows that step through `frames` every `frame_ms` (at least 80). Each frame maps row numbers to markup, like a flash |
+
+Each step goes out as a row update (the header and the changed rows, no erase), so the
+screen doesn't blank. It counts against the publisher's flash budget: a ticker at 6
+cells/s costs about 12 packets/s. Over budget, steps are delayed, not dropped. Motion
+runs on the subpage on screen, stops while the page is expired, and starts again from
+the beginning when the page is PUT again. The web viewer's feed gets the moving rows as
+`page` events, at most 4 a second.
+
 #### Level 2.5 data
 
 A subpage can also be an object. Every field is optional:

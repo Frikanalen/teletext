@@ -34,6 +34,13 @@ pub struct StoredPage {
     /// pages (DRCS, objects) that rarely change; None = every pass.
     #[serde(default)]
     pub repeat_secs: Option<u32>,
+    /// Rows that scroll, and rows that step through frames (see `motion`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tickers: Vec<crate::motion::Ticker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub animation: Option<crate::motion::Animation>,
+    #[serde(skip)]
+    motion: crate::motion::MotionState,
     /// The DRCS page this page's own characters are on. ttxd lists it in the
     /// magazine's MOT, which is how a decoder finds it.
     #[serde(default)]
@@ -62,6 +69,9 @@ impl StoredPage {
             updated: now,
             flags: PageFlags::default(),
             repeat_secs: None,
+            tickers: vec![],
+            animation: None,
+            motion: Default::default(),
             drcs_page: None,
             last_sent: None,
             sub_idx: 0,
@@ -220,6 +230,8 @@ pub struct Service {
     pub assets: Assets,
     pub gpop_page: PageNo,
     pub gdrcs_page: PageNo,
+    /// Pages whose rows motion changed since the last call to `take_motion_updates`.
+    motion_updates: Vec<PageNo>,
 }
 
 /// Owner of the pages ttxd builds itself (MOT, GPOP, GDRCS).
@@ -247,6 +259,7 @@ impl Service {
             assets: Assets::default(),
             gpop_page: PageNo::new(8, 0xE8),
             gdrcs_page: PageNo::new(8, 0xE9),
+            motion_updates: vec![],
         }
     }
 
@@ -254,6 +267,11 @@ impl Service {
     /// every magazine, and the global object and DRCS pages.
     pub fn reserved(&self, no: PageNo) -> bool {
         no.num >= 0xFD || no == self.gpop_page || no == self.gdrcs_page
+    }
+
+    /// Pages whose rows tickers or animations changed since the last call.
+    pub fn take_motion_updates(&mut self) -> Vec<PageNo> {
+        std::mem::take(&mut self.motion_updates)
     }
 
     /// Replace the shared assets and rebuild the pages made from them. Returns the
@@ -388,11 +406,25 @@ impl Service {
             content.set_row(r, m)?;
         }
         page.updated = now;
+        let changed: Vec<u8> = rows.keys().copied().collect();
+        self.flash_changed(no, sub, &changed);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Queue a row update (no erase) of `rows` of subpage `sub`, as they are stored.
+    fn flash_changed(&mut self, no: PageNo, sub: usize, rows: &[u8]) {
+        let Some(page) = self.pages.get(&no) else {
+            return;
+        };
+        let Some(content) = page.subpages.get(sub) else {
+            return;
+        };
         let mut partial = Content {
             rows: vec![vec![b' '; COLS]; content.rows.len()],
             ..content.clone()
         };
-        for &r in rows.keys() {
+        for &r in rows {
             partial.rows[r as usize - 1] = content.rows[r as usize - 1].clone();
         }
         let mut unit = Unit::new(
@@ -411,11 +443,45 @@ impl Service {
         unit.rest.retain(|p| {
             let row = crate::ham::unham84(p[0]).unwrap_or(0) >> 3
                 | crate::ham::unham84(p[1]).unwrap_or(0) << 1;
-            (26..=28).contains(&row) || rows.contains_key(&row)
+            (26..=28).contains(&row) || rows.contains(&row)
         });
         self.queue_flash(unit);
-        self.dirty = true;
-        Ok(())
+    }
+
+    /// Step tickers and animations that are due, and flash the rows they change.
+    fn tick_motion(&mut self, now: SystemTime) {
+        let mut flashes = vec![];
+        for (no, page) in self.pages.iter_mut() {
+            if (page.tickers.is_empty() && page.animation.is_none()) || page.expired(now) {
+                continue;
+            }
+            let rows = crate::motion::advance(
+                &page.tickers,
+                page.animation.as_ref(),
+                &mut page.motion,
+                now,
+            );
+            if rows.is_empty() {
+                continue;
+            }
+            let sub = page.sub_idx % page.subpages.len().max(1);
+            let Some(content) = page.subpages.get_mut(sub) else {
+                continue;
+            };
+            for (&r, (codes, g2)) in &rows {
+                content.rows[r as usize - 1] = codes.clone();
+                content.g2.retain(|&(gr, _, _)| gr != r);
+                content.g2.extend(g2.iter().map(|&(c, g)| (r, c, g)));
+            }
+            content.g2.sort();
+            flashes.push((*no, sub, rows.keys().copied().collect::<Vec<u8>>()));
+        }
+        for (no, sub, rows) in flashes {
+            self.flash_changed(no, sub, &rows);
+            if !self.motion_updates.contains(&no) {
+                self.motion_updates.push(no);
+            }
+        }
     }
 
     fn queue_flash(&mut self, unit: Unit) {
@@ -502,6 +568,7 @@ impl Service {
 
     /// Fill one frame, with each packet's kind and whether the carousel wrapped.
     pub fn next_link_frame(&mut self, now: SystemTime) -> Frame {
+        self.tick_motion(now);
         self.cycle_start = false;
         self.stats.frames += 1;
         for b in self.buckets.values_mut() {
@@ -946,5 +1013,33 @@ mod tests {
         let text = String::from_utf8_lossy(&t);
         assert!(text.starts_with("FRIKANALEN"));
         assert_eq!(&text[26..27], ":");
+    }
+
+    #[test]
+    fn tickers_flash_their_row_as_they_scroll() {
+        let mut s = svc_with(&["200"]);
+        let no: PageNo = "200".parse().unwrap();
+        s.set_flash_budget("t", 100.0);
+        let page = s.pages.get_mut(&no).unwrap();
+        page.owner = "t".into();
+        page.tickers = vec![crate::motion::Ticker {
+            row: 24,
+            text: "Siste nytt fra Frikanalen: ".repeat(3),
+            prefix: String::new(),
+            cells_per_sec: 10.0,
+        }];
+        let start = SystemTime::now();
+        let mut rows24 = std::collections::BTreeSet::new();
+        for f in 0..100u64 {
+            let now = start + Duration::from_millis(20 * f);
+            for p in s.next_frame(now) {
+                if row_of(&p) == 24 && mag_of(&p) == 2 {
+                    rows24.insert(p[2..].to_vec());
+                }
+            }
+        }
+        // About 20 steps in 2 s, each a different row.
+        assert!(rows24.len() >= 15, "{} distinct ticker rows", rows24.len());
+        assert_eq!(s.take_motion_updates(), vec![no]);
     }
 }
