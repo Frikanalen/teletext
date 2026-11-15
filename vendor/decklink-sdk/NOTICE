@@ -1,0 +1,23 @@
+Blackmagic DeckLink SDK 16.0 - Linux headers
+============================================
+
+The files in include/ are the unmodified contents of the Linux/include/
+folder of the Blackmagic DeckLink SDK 16.0, obtained from
+https://www.blackmagicdesign.com/desktopvideo_sdk. Nothing else from the
+SDK (samples, examples, documentation, EULA) is included here.
+
+Each file carries its own licence notice at the top. Those licences permit
+use, reproduction, distribution and sub-licensing, provided the copyright
+notice and licence statement are kept in all copies. Do not edit or strip
+these notices.
+
+Clause 0.1 of the SDK's End User License Agreement states that its
+restrictive clauses (1, 4.3, 4.4, 5, 7 and 8) do not apply to the files in
+the SDK's /Mac/Include, /Win/Include and /Linux/Include sub-folders.
+
+Blackmagic Design and DeckLink are trademarks of Blackmagic Design Pty. Ltd.
+ttxd is not affiliated with or endorsed by Blackmagic Design; it is software
+"for Blackmagic Design DeckLink".
+
+The shared library libDeckLinkAPI.so is not included. At run time it is
+provided by Blackmagic Desktop Video on the host.
