@@ -20,9 +20,12 @@ in [generator/](generator/README.md), which pushes them to ttxd through this API
 
 ## Releases
 
-Tag `vX.Y.Z` on main (matching `version` in `Cargo.toml`) and GitHub Actions builds
-`ttxd` with DeckLink output on Ubuntu 24.04 and attaches `ttxd-x86_64-linux-gnu` and its
-`.sha256` to the release. infra's `roles/ttxd` installs that asset.
+Releases are cut by [release-please](https://github.com/googleapis/release-please) from
+the [Conventional Commits](https://www.conventionalcommits.org/) on main: it keeps a
+release PR open that bumps `Cargo.toml` and updates `CHANGELOG.md`. Merging that PR tags
+`vX.Y.Z`, and GitHub Actions builds `ttxd` with DeckLink output on Ubuntu 24.04 and
+attaches `ttxd-x86_64-linux-gnu` and its `.sha256` to the release. Don't tag by hand.
+infra's `roles/ttxd` installs that asset.
 
 The DeckLink SDK's Linux headers are vendored in `vendor/decklink-sdk/include` under the
 licence at the top of each file; see `vendor/decklink-sdk/NOTICE`.
