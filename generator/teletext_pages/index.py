@@ -294,14 +294,10 @@ def enhancements(cfg: IndexConfig, rows: list[str], at: sky.Look) -> dict:
     row_colours = {}
     for row in range(1, sky.ROWS + 1):
         colour = SKY_COLOUR + row - 1
-        # The logo's mark stands on the page's own background, also where it reaches
-        # into the last row of sky: that row's sky starts beside the mark.
-        start = WORD_COL - 1 if row == LOGO_ROW else 0
-        if not start:
-            row_colours[row] = colour
-        backgrounds[row] = [(start, 0x03, colour)]
+        row_colours[row] = colour
+        backgrounds[row] = [(0, 0x03, colour)]
         for col, token in enumerate(_tokens(rows[row - 1])):
-            if token == "{blackbg}" and col > start:
+            if token == "{blackbg}":
                 backgrounds[row].append((col, 0x03, colour))
     keys = _key_colours(rows)
     blank = _block_logo_cells()
