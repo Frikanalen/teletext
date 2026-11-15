@@ -7,6 +7,7 @@
 //! that needs a busy magazine preempts the lower tier's page (it is resent later).
 
 use crate::charset::encode_char;
+use crate::link::{Frame, Kind};
 use crate::page::{COLS, Content, Flags, Packet, PageNo, page_packets, parse_cells};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
@@ -173,6 +174,8 @@ pub struct Service {
     unterminated: Vec<PageNo>,
     /// Packet 8/30 contents; sent once a second when set.
     pub service_data: Option<crate::p830::ServiceData>,
+    /// Set by the carousel when it wraps round to its first page.
+    cycle_start: bool,
 }
 
 impl Service {
@@ -190,6 +193,7 @@ impl Service {
             filler_mag: 1,
             unterminated: vec![],
             service_data: None,
+            cycle_start: false,
         }
     }
 
@@ -346,6 +350,9 @@ impl Service {
             }
             page.sub_idx %= page.subpages.len();
             let idx = page.sub_idx;
+            if self.cursor.is_none_or(|c| no <= c) {
+                self.cycle_start = true;
+            }
             self.cursor = Some(no);
             return Some(Unit::new(
                 Tier::Carousel,
@@ -375,6 +382,12 @@ impl Service {
 
     /// Fill one frame's worth of packets.
     pub fn next_frame(&mut self, now: SystemTime) -> Vec<Packet> {
+        self.next_link_frame(now).packets()
+    }
+
+    /// Fill one frame, with each packet's kind and whether the carousel wrapped.
+    pub fn next_link_frame(&mut self, now: SystemTime) -> Frame {
+        self.cycle_start = false;
         self.stats.frames += 1;
         for b in self.buckets.values_mut() {
             b.tokens = (b.tokens + b.rate / FRAMES_PER_SEC).min(b.burst);
@@ -388,22 +401,30 @@ impl Service {
             && self.stats.frames % FRAMES_PER_SEC as u64 == 1
         {
             let local: DateTime<Local> = now.into();
-            out.push(crate::p830::packet(
-                sd,
-                now.into(),
-                local.offset().local_minus_utc(),
+            out.push((
+                Kind::ServiceData,
+                crate::p830::packet(sd, now.into(), local.offset().local_minus_utc()),
             ));
             self.stats.service_data_packets += 1;
         }
         while out.len() < PACKETS_PER_FRAME {
             match self.pick(now, &header) {
                 Some((tier, p)) => {
-                    match tier {
-                        Tier::Subtitle => self.stats.subtitle_packets += 1,
-                        Tier::Flash => self.stats.flash_packets += 1,
-                        Tier::Carousel => self.stats.carousel_packets += 1,
-                    }
-                    out.push(p);
+                    let kind = match tier {
+                        Tier::Subtitle => {
+                            self.stats.subtitle_packets += 1;
+                            Kind::Subtitle
+                        }
+                        Tier::Flash => {
+                            self.stats.flash_packets += 1;
+                            Kind::Flash
+                        }
+                        Tier::Carousel => {
+                            self.stats.carousel_packets += 1;
+                            Kind::Carousel
+                        }
+                    };
+                    out.push((kind, p));
                 }
                 None => break,
             }
@@ -413,16 +434,22 @@ impl Service {
             let mag = self.filler_mag;
             self.filler_mag = self.filler_mag % 8 + 1;
             if !self.inflight.iter().any(|u| u.page.mag == mag) {
-                out.push(crate::page::header_packet(
-                    PageNo::new(mag, 0xFF),
-                    0x3F7F,
-                    Flags::default(),
-                    &header,
+                out.push((
+                    Kind::Filler,
+                    crate::page::header_packet(
+                        PageNo::new(mag, 0xFF),
+                        0x3F7F,
+                        Flags::default(),
+                        &header,
+                    ),
                 ));
                 self.stats.filler_packets += 1;
             }
         }
-        out
+        Frame {
+            cycle_start: self.cycle_start,
+            packets: out,
+        }
     }
 
     fn budget_ok(&self, owner: &Option<String>) -> bool {
@@ -593,6 +620,22 @@ mod tests {
     fn run(s: &mut Service, frames: usize) -> Vec<Packet> {
         let now = SystemTime::now();
         (0..frames).flat_map(|_| s.next_frame(now)).collect()
+    }
+
+    #[test]
+    fn link_frames_mark_kinds_and_cycle_start() {
+        let mut s = svc_with(&["100", "101"]);
+        let now = SystemTime::now();
+        let frames: Vec<Frame> = (0..40).map(|_| s.next_link_frame(now)).collect();
+        assert!(frames[0].cycle_start);
+        let starts = frames.iter().filter(|f| f.cycle_start).count();
+        assert!(starts >= 2, "carousel of two pages wraps within 40 frames");
+        assert!(
+            frames
+                .iter()
+                .flat_map(|f| &f.packets)
+                .all(|(k, _)| matches!(k, Kind::Carousel | Kind::Filler | Kind::ServiceData))
+        );
     }
 
     #[test]

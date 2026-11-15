@@ -1,12 +1,8 @@
-//! DeckLink SDI output: the card's frame clock drives the scheduler.
+//! DeckLink SDI output: the card's frame clock calls back for each frame's OP-47 packet.
 
 use crate::op47;
 use crate::page::Packet;
-use crate::service::Service;
 use std::ffi::{CString, c_void};
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
-use tokio::sync::broadcast;
 
 type FillFn = extern "C" fn(*mut c_void, *mut u8, usize) -> usize;
 
@@ -21,9 +17,11 @@ unsafe extern "C" {
     ) -> i32;
 }
 
+/// Called once per frame on the SDK's thread; returns that frame's packets (at most 5).
+pub type NextFrame = Box<dyn FnMut() -> Vec<Packet> + Send>;
+
 struct Ctx {
-    svc: Arc<Mutex<Service>>,
-    tx: broadcast::Sender<Vec<Packet>>,
+    next: NextFrame,
     lines: [u8; 5],
     seq: u16,
 }
@@ -31,13 +29,9 @@ struct Ctx {
 extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
     // SAFETY: `user` is the leaked Ctx from `start`, only used from the SDK's callback thread.
     let ctx = unsafe { &mut *(user as *mut Ctx) };
-    let packets = match ctx.svc.lock() {
-        Ok(mut s) => s.next_frame(SystemTime::now()),
-        Err(_) => return 0,
-    };
+    let packets = (ctx.next)();
     let sdp = op47::sdp(&packets, &ctx.lines, ctx.seq);
     ctx.seq = ctx.seq.wrapping_add(1);
-    let _ = ctx.tx.send(packets);
     let n = sdp.len().min(cap);
     // SAFETY: the shim passes a buffer of `cap` bytes.
     unsafe { std::ptr::copy_nonoverlapping(sdp.as_ptr(), buf, n) };
@@ -45,16 +39,9 @@ extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
 }
 
 /// Start playback on the named device. Runs until the process exits.
-pub fn start(
-    device: &str,
-    vanc_line: u32,
-    lines: [u8; 5],
-    svc: Arc<Mutex<Service>>,
-    tx: broadcast::Sender<Vec<Packet>>,
-) -> anyhow::Result<()> {
+pub fn start(device: &str, vanc_line: u32, lines: [u8; 5], next: NextFrame) -> anyhow::Result<()> {
     let ctx = Box::into_raw(Box::new(Ctx {
-        svc,
-        tx,
+        next,
         lines,
         seq: 0,
     }));

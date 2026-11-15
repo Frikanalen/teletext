@@ -1,0 +1,6 @@
+apiVersion: v2
+name: teletext
+description: Frikanalen's teletext page server (ttxd); ttx-inject on the SDI host connects to it for frames
+type: application
+version: 0.2.0 # x-release-please-version
+appVersion: "0.2.0" # x-release-please-version

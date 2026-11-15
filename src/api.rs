@@ -352,6 +352,7 @@ mod tests {
         let publishers = vec![Publisher {
             name: "schedule".into(),
             token: "secret".into(),
+            token_env: None,
             pages: vec!["200-29F".into()],
             subtitles: false,
             status_display: true,

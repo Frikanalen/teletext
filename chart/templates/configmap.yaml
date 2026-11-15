@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ttxd
+  labels:
+    {{- include "teletext.labels" . | nindent 4 }}
+data:
+  ttxd.toml: |
+    listen = "0.0.0.0:{{ .Values.service.port }}"
+    inject_listen = "0.0.0.0:{{ .Values.link.port }}"
+    {{- if .Values.public.enabled }}
+    public_listen = "0.0.0.0:{{ .Values.public.port }}"
+    {{- end }}
+    snapshot = "/var/lib/ttxd/pages.json"
+    service_name = {{ .Values.config.serviceName | quote }}
+    initial_page = {{ .Values.config.initialPage | quote }}
+    network_id = {{ .Values.config.networkId | int }}
+    {{- range .Values.publishers }}
+
+    [[publisher]]
+    name = {{ .name | quote }}
+    token_env = {{ include "teletext.tokenEnv" .name | quote }}
+    pages = [{{ range $i, $p := .pages }}{{ if $i }}, {{ end }}{{ $p | quote }}{{ end }}]
+    {{- if .subtitles }}
+    subtitles = true
+    {{- end }}
+    {{- if .statusDisplay }}
+    status_display = true
+    {{- end }}
+    {{- with .flashPerSec }}
+    flash_per_sec = {{ . }}
+    {{- end }}
+    {{- end }}

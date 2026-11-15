@@ -30,3 +30,10 @@ jobs:
       - run: pipx run ruff check .
       - run: python -m unittest -v
       - run: python -m teletext_pages.main pages.example.toml --dry-run
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+      - run: helm lint --strict chart
+      - run: helm template teletext chart --set link.service.loadBalancerIP=192.0.2.1 --set public.enabled=true

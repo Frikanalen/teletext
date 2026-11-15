@@ -1,0 +1,70 @@
+# One replica only: ttxd owns the frame clock and the page store, and ttx-inject
+# talks to exactly one ttxd.
+image:
+  repository: ghcr.io/frikanalen/ttxd
+  # Defaults to v<chart version>.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+timezone: Europe/Oslo
+
+# ttxd.toml, apart from the listen addresses and publishers below.
+config:
+  serviceName: FRIKANALEN
+  initialPage: "100"
+  networkId: 0
+
+# Publishers and the pages they may write. Each token comes from key `tokenKey` of
+# the Secret named in `tokens.secretName`.
+publishers:
+  - name: pages
+    tokenKey: pages
+    pages: ["100-7FF"]
+    statusDisplay: true
+    flashPerSec: 100
+  - name: subtitles
+    tokenKey: subtitles
+    pages: ["888"]
+    subtitles: true
+
+tokens:
+  secretName: ttxd-tokens
+  # Write that Secret from OpenBao with External Secrets Operator. The path holds
+  # one key per publisher token.
+  externalSecret:
+    enabled: true
+    secretStore: openbao
+    key: staging/teletext/ttxd-tokens
+
+# HTTP API for publishers, inside the cluster.
+service:
+  type: ClusterIP
+  port: 8080
+
+# The link ttx-inject on the SDI host connects to. It is outside the cluster, so
+# this is a LoadBalancer with a fixed address.
+link:
+  port: 4243
+  service:
+    type: LoadBalancer
+    loadBalancerIP: ""
+
+# Read-only public feed (public_listen), when ttxd has it.
+public:
+  enabled: false
+  port: 8081
+
+persistence:
+  size: 1Gi
+  storageClass: ""
+
+# The studio page generator (ttx-pages), next to ttxd.
+pages:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    memory: 256Mi

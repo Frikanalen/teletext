@@ -1,0 +1,17 @@
+# The page store (pages.json), so pages survive a restart.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ttxd-data
+  labels:
+    {{- include "teletext.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}

@@ -16,9 +16,7 @@
 
 use crate::page::Packet;
 
-#[cfg_attr(not(feature = "decklink"), allow(dead_code))]
 pub const DID: u8 = 0x43;
-#[cfg_attr(not(feature = "decklink"), allow(dead_code))]
 pub const SDID: u8 = 0x02;
 pub const MAX_PACKETS: usize = 5;
 

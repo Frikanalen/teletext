@@ -8,7 +8,13 @@
       "include-v-in-tag": true,
       "include-component-in-tag": false,
       "draft": false,
-      "prerelease": false
+      "prerelease": false,
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "chart/Chart.yaml"
+        }
+      ]
     }
   },
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json"

@@ -6,7 +6,8 @@ not implemented.
 
 ## Basics
 
-- Base URL: `http://<ttxd-host>:8080/v1`. The staging instance runs on sdi-test1.
+- Base URL: `http://<ttxd-host>:8080/v1`. In the staging cluster that is
+  `http://ttxd.teletext.svc.cluster.local:8080/v1`.
 - JSON in and out, UTF-8.
 - Every write needs `Authorization: Bearer <token>`. Each token belongs to one
   *publisher*. The config gives each publisher its page ranges (for example `200-29F`),
