@@ -11,10 +11,9 @@ import logging
 import os
 import sys
 import time
+import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-
-import tomllib
 
 from . import index, schedule, sky, weather
 from .index import Entry, IndexConfig, directory, logo
