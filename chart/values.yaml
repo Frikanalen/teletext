@@ -53,6 +53,12 @@ link:
 public:
   enabled: false
   port: 8081
+  # Route https://<hostname>/teletext/ to it, for the live player's teletext button.
+  ingress:
+    enabled: false
+    className: public
+    hostname: ""
+    certResolver: letsencrypt
 
 persistence:
   size: 1Gi
