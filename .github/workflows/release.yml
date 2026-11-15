@@ -29,7 +29,7 @@ jobs:
       - name: Check the tag name
         run: |
           case "$TAG" in v*) ;; *) echo "::error::expected a v-prefixed tag, got '$TAG'"; exit 1;; esac
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - uses: dtolnay/rust-toolchain@stable
