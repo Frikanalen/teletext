@@ -5,7 +5,8 @@ Renders Frikanalen's studio teletext pages and keeps them up to date in
 
 So far there is one page:
 
-- **100, the index.** What is on now and next (from django-api's schedule, with
+- **100, the index.** A banner with the logo and FRIKANALEN in big mosaic
+  ("block") graphics (`teletext_pages/mosaic.py`), what is on now and next (from django-api's schedule, with
   DIREKTE flashing when the programme is live), and a directory of the other pages.
   A directory entry is listed only while ttxd is sending that page, unless it has
   `always = true`.
@@ -19,14 +20,18 @@ older decoders show the plain Level 1 page (see `teletext_pages/level25.py`):
   palette and maps the Level 1 colours onto it: black is ink, white is paper, cyan is
   amber, blue is ink-2, magenta is plum. So every page could use it without changing
   its markup.
-- **Logo.** `teletext_pages/assets/logo.ppm` (204x30 teletext pixels, cut from the
-  on-air graphics logo) is cut into 12x10 tiles. The 48 distinct tiles go on a hidden
-  DRCS page (`drcs_page`, default `10F`), and X/26 triplets place them on rows 1-3,
-  each cell coloured from colour table 3 (the logo's gradient steps).
+- **Logo.** The mark (`assets/mark.ppm`, 62x50 teletext pixels) and the wordmark
+  (`assets/wordmark.ppm`, 355x27), rasterised from the on-air graphics logo, are cut
+  into 12x10 tiles and drawn over the mosaic logo on rows 1-5. The tiles go on a hidden
+  DRCS page (`drcs_page`, default `10F`), 48 per subpage and each row from one
+  subpage; X/26 triplets place them, each cell coloured from colour table 3 (the
+  logo's gradient steps), and blank the mosaic cells the real logo doesn't cover. The
+  DRCS page goes round at most every 8 seconds (ttxd's `repeat_secs`), so a TV that
+  tunes in has the whole logo within about half a minute.
 - Set `level25 = false` under `[index]` to send a plain Level 1 page.
 
-The banner has no double height, because a Level 1 double-height row hides the row
-below it on every decoder, which would cut the logo in half.
+Nothing on the page is double height, because a Level 1 double-height row hides the
+row below it on every decoder.
 
 To see what a decoder makes of it, dump ttxd's T42 debug stream and draw it with
 libzvbi (`tools/t42render.c`):
@@ -35,6 +40,9 @@ libzvbi (`tools/t42render.c`):
 nc 127.0.0.1 4242 > dump.t42      # a few seconds
 t42render dump.t42 100 2.5 page.ppm
 ```
+
+libzvbi applies the X/28 palette at every level, so for what an old TV shows, drop the
+X/26-X/28 packets from the dump before drawing it at level 1.
 
 ## Running
 

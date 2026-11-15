@@ -9,7 +9,9 @@ class FakeTtxd:
         self.calls = []
         self.fail = False
 
-    def put_page(self, page, subpages, *, ttl_secs, cycle_secs=10, flash=False, flags=None):
+    def put_page(
+        self, page, subpages, *, ttl_secs, cycle_secs=10, flash=False, flags=None, repeat_secs=None
+    ):
         if self.fail:
             raise TtxdError("down")
         self.calls.append(("put", page, flash, ttl_secs))
