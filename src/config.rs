@@ -19,6 +19,7 @@ pub struct Config {
     /// stands in for the frame clock (needs the `decklink` build feature).
     pub decklink_device: Option<String>,
     /// VANC line carrying the OP-47 packet.
+    #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
     #[serde(default = "default_vanc_line")]
     pub vanc_line: u32,
     #[serde(default, rename = "publisher")]
