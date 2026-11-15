@@ -41,6 +41,7 @@ public:
     uint8_t STDMETHODCALLTYPE GetSDID() override { return sdid_; }
     uint32_t STDMETHODCALLTYPE GetLineNumber() override { return line_; }
     uint8_t STDMETHODCALLTYPE GetDataStreamIndex() override { return 0; }
+    BMDAncillaryDataSpace STDMETHODCALLTYPE GetDataSpace() override { return bmdAncillaryDataSpaceVANC; }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, LPVOID* ppv) override {
         *ppv = nullptr;
         return E_NOINTERFACE;
