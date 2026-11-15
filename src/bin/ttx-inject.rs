@@ -29,10 +29,14 @@ struct Config {
     #[serde(default = "default_vanc_line")]
     #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
     vanc_line: u32,
-    /// Line numbers put in the five OP-47 descriptors.
-    #[serde(default = "default_lines")]
+    /// OP-47 packets per frame, 1-3 (5 teletext lines each). The encoding appliance
+    /// must be in multi-packet mode for more than 1.
+    #[serde(default = "default_op47_packets")]
+    op47_packets: usize,
+    /// Line numbers put in the OP-47 descriptors, 5 per packet. Defaults to 7 upwards.
+    #[serde(default)]
     #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
-    op47_lines: [u8; 5],
+    op47_lines: Option<Vec<u8>>,
     /// Frames asked for ahead of the card. Each is 20 ms of delay.
     #[serde(default = "default_buffer")]
     buffer_frames: usize,
@@ -47,8 +51,8 @@ struct Config {
 fn default_vanc_line() -> u32 {
     9
 }
-fn default_lines() -> [u8; 5] {
-    [7, 8, 9, 10, 11]
+fn default_op47_packets() -> usize {
+    1
 }
 fn default_buffer() -> usize {
     2
@@ -188,15 +192,16 @@ fn set_clock(mut p: Packet, clock: &str) -> Packet {
     p
 }
 
-/// Keep a connection to ttxd, filling `buf`. Credits from the card go out as requests.
-fn network(addr: String, buf: Buffer, credits: Receiver<()>, ahead: usize) {
+/// Keep a connection to ttxd, filling `buf`. Credits from the card go out as requests;
+/// `credit` is the credit byte (the number of OP-47 packets per frame).
+fn network(addr: String, buf: Buffer, credits: Receiver<()>, ahead: usize, credit: u8) {
     let mut last_err = String::new();
     loop {
         match connect(&addr) {
             Ok(sock) => {
                 last_err.clear();
                 tracing::info!("connected to ttxd at {addr}");
-                if let Err(e) = serve(sock, &buf, &credits, ahead) {
+                if let Err(e) = serve(sock, &buf, &credits, ahead, credit) {
                     tracing::warn!("lost ttxd: {e:#}");
                 }
             }
@@ -232,6 +237,7 @@ fn serve(
     buf: &Buffer,
     credits: &Receiver<()>,
     ahead: usize,
+    credit: u8,
 ) -> anyhow::Result<()> {
     buf.lock().unwrap().clear();
     while credits.try_recv().is_ok() {}
@@ -252,10 +258,10 @@ fn serve(
     };
     let mut w = sock;
     let r = (|| -> anyhow::Result<()> {
-        w.write_all(&vec![link::CREDIT; ahead])?;
+        w.write_all(&vec![credit; ahead])?;
         while alive.load(Ordering::Relaxed) {
             match credits.recv_timeout(Duration::from_millis(200)) {
-                Ok(()) => w.write_all(&[link::CREDIT])?,
+                Ok(()) => w.write_all(&[credit])?,
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => anyhow::bail!("output stopped"),
             }
@@ -280,12 +286,26 @@ fn main() -> anyhow::Result<()> {
         &std::fs::read_to_string(&path).with_context(|| format!("reading {path}"))?,
     )?;
     anyhow::ensure!(cfg.buffer_frames >= 1, "buffer_frames must be at least 1");
+    anyhow::ensure!(
+        (1..=link::MAX_SDPS).contains(&cfg.op47_packets),
+        "op47_packets is 1-{}",
+        link::MAX_SDPS
+    );
+    let op47_lines: Vec<u8> = cfg
+        .op47_lines
+        .clone()
+        .unwrap_or_else(|| (7..7 + 5 * cfg.op47_packets as u8).collect());
+    anyhow::ensure!(
+        op47_lines.len() == 5 * cfg.op47_packets,
+        "op47_lines needs 5 lines per OP-47 packet"
+    );
+    let credit = cfg.op47_packets as u8;
 
     let buf: Buffer = Arc::default();
     let (credit_tx, credit_rx) = mpsc::channel();
     {
         let (addr, buf, ahead) = (cfg.ttxd.clone(), buf.clone(), cfg.buffer_frames);
-        std::thread::spawn(move || network(addr, buf, credit_rx, ahead));
+        std::thread::spawn(move || network(addr, buf, credit_rx, ahead, credit));
     }
     let mut out = Output {
         buf,
@@ -303,13 +323,12 @@ fn main() -> anyhow::Result<()> {
     match &cfg.decklink_device {
         #[cfg(feature = "decklink")]
         Some(dev) => {
-            ttxd::decklink::start(
-                dev,
+            ttxd::decklink::start(dev, cfg.vanc_line, op47_lines, Box::new(move || out.next()))?;
+            tracing::info!(
+                "OP-47 on {dev:?}, VANC line {}, {} packet(s) per frame",
                 cfg.vanc_line,
-                cfg.op47_lines,
-                Box::new(move || out.next()),
-            )?;
-            tracing::info!("OP-47 on {dev:?}, VANC line {}", cfg.vanc_line);
+                cfg.op47_packets
+            );
             loop {
                 std::thread::park();
             }

@@ -632,6 +632,11 @@ impl Service {
 
     /// Fill one frame, with each packet's kind and whether the carousel wrapped.
     pub fn next_link_frame(&mut self, now: SystemTime) -> Frame {
+        self.next_link_frame_cap(now, PACKETS_PER_FRAME)
+    }
+
+    /// Fill one frame of up to `cap` packets (5 per OP-47 packet the injector sends).
+    pub fn next_link_frame_cap(&mut self, now: SystemTime, cap: usize) -> Frame {
         self.tick_motion(now);
         self.cycle_start = false;
         self.stats.frames += 1;
@@ -654,7 +659,7 @@ impl Service {
             ));
             self.stats.service_data_packets += 1;
         }
-        while out.len() < PACKETS_PER_FRAME {
+        while out.len() < cap {
             match self.pick(now, &header) {
                 Some((tier, p)) => {
                     let kind = match tier {
@@ -1110,6 +1115,19 @@ mod tests {
         let text = String::from_utf8_lossy(&t);
         assert!(text.starts_with("FRIKANALEN"));
         assert_eq!(&text[26..27], ":");
+    }
+
+    #[test]
+    fn frames_fill_to_the_injectors_capacity() {
+        let names: Vec<String> = (0..10).map(|i| format!("1{i:02}")).collect();
+        let mut s = svc_with(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        for p in s.pages.values_mut() {
+            p.subpages[0] = Content::from_markup(&vec!["x".to_string(); 23]).unwrap();
+        }
+        let now = SystemTime::now();
+        let f = s.next_link_frame_cap(now, 15);
+        assert_eq!(f.packets.len(), 15);
+        assert_eq!(s.next_link_frame(now).packets.len(), 5);
     }
 
     #[test]

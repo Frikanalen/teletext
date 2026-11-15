@@ -262,8 +262,11 @@ async fn serve_injector(
             "replaced by a newer injector"
         );
         let mut out = Vec::new();
-        for _ in credits[..n].iter().filter(|&&b| b == link::CREDIT) {
-            let frame = svc.lock().unwrap().next_link_frame(SystemTime::now());
+        for cap in credits[..n].iter().filter_map(|&b| link::credit_packets(b)) {
+            let frame = svc
+                .lock()
+                .unwrap()
+                .next_link_frame_cap(SystemTime::now(), cap);
             out.extend(frame.encode());
             let _ = tx.send(frame.packets());
         }

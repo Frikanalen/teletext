@@ -367,9 +367,10 @@ answers 503.
 
 ## Bandwidth
 
-The whole service has about 250 packets/s, and a full page is about 26 packets. With N
-pages in the carousel, each page comes round about every N/10 seconds. That works out to
-roughly 2 s for 20 pages and 5 s for 50. A viewer who keys in a page waits half that on
+The whole service has about 250 packets/s per OP-47 packet the injector sends per frame
+(`op47_packets`, 1-3), and a full page is about 26 packets. With N pages in the carousel
+and one OP-47 packet, each page comes round about every N/10 seconds. That works out to
+roughly 2 s for 20 pages and 5 s for 50; with 3 OP-47 packets, a third of that. A viewer who keys in a page waits half that on
 average. Blank rows still cost a packet in the carousel, so short pages do not make the
 cycle faster.
 

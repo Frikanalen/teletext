@@ -20,6 +20,29 @@ pub const DID: u8 = 0x43;
 pub const SDID: u8 = 0x02;
 pub const MAX_PACKETS: usize = 5;
 
+/// One frame's packets as `sdps` SDPs (at least one, even with no packets). Packets
+/// `5k..5k+5` go in SDP k, with descriptor lines `lines[5k..5k+5]`. Each SDP takes the
+/// next sequence number.
+pub fn sdps(packets: &[Packet], lines: &[u8], seq: &mut u16) -> Vec<Vec<u8>> {
+    let mut chunks: Vec<&[Packet]> = packets.chunks(MAX_PACKETS).collect();
+    if chunks.is_empty() {
+        chunks.push(&[]);
+    }
+    assert!(
+        lines.len() >= chunks.len() * MAX_PACKETS,
+        "not enough OP-47 lines"
+    );
+    chunks
+        .iter()
+        .zip(lines.as_chunks::<MAX_PACKETS>().0)
+        .map(|(chunk, l)| {
+            let v = sdp(chunk, l, *seq);
+            *seq = seq.wrapping_add(1);
+            v
+        })
+        .collect()
+}
+
 /// Build one SDP from up to 5 packets. `lines[i]` is the VBI line number put in slot i's descriptor.
 pub fn sdp(packets: &[Packet], lines: &[u8; MAX_PACKETS], seq: u16) -> Vec<u8> {
     assert!(packets.len() <= MAX_PACKETS);
@@ -62,5 +85,18 @@ mod tests {
         assert_eq!(v.iter().fold(0u8, |a, &b| a.wrapping_add(b)), 0);
         // A full SDP fits in one SMPTE 291 packet (max 255 user data words).
         assert!(sdp(&[[0; 42]; 5], &[7, 8, 9, 10, 11], 0).len() <= 255);
+    }
+
+    #[test]
+    fn frames_split_into_sdps() {
+        let lines: Vec<u8> = (7..22).collect();
+        let mut seq = 0xFFFF;
+        let v = sdps(&[[1; 42]; 7], &lines, &mut seq);
+        assert_eq!(v.len(), 2);
+        assert_eq!(&v[0][4..9], &[0x87, 0x88, 0x89, 0x8A, 0x8B]);
+        assert_eq!(&v[1][4..9], &[0x8C, 0x8D, 0, 0, 0]);
+        assert_eq!(&v[1][v[1].len() - 3..v[1].len() - 1], &[0, 0]);
+        assert_eq!(seq, 1);
+        assert_eq!(sdps(&[], &lines, &mut seq).len(), 1);
     }
 }
