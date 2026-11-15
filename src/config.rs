@@ -31,6 +31,8 @@ pub struct Config {
     pub gpop_page: PageNo,
     #[serde(default = "default_gdrcs")]
     pub gdrcs_page: PageNo,
+    /// Return-path monitor: read the broadcast transport stream and check our teletext.
+    pub monitor: Option<crate::monitor::MonitorConfig>,
     #[serde(default, rename = "publisher")]
     pub publishers: Vec<Publisher>,
 }

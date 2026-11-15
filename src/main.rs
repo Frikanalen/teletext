@@ -216,10 +216,20 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let monitor = cfg.monitor.clone().map(|m| {
+        let shared = ttxd::monitor::Shared::default();
+        let s = shared.clone();
+        std::thread::Builder::new()
+            .name("monitor".into())
+            .spawn(move || ttxd::monitor::run(m, s))
+            .expect("start monitor thread");
+        shared
+    });
     let state = api::AppState {
         svc,
         publishers: Arc::new(cfg.publishers),
         feed,
+        monitor,
     };
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     tracing::info!("API on {}", cfg.listen);

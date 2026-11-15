@@ -36,6 +36,7 @@ pub struct AppState {
     pub svc: Arc<Mutex<Service>>,
     pub publishers: Arc<Vec<Publisher>>,
     pub feed: crate::feed::Feed,
+    pub monitor: Option<crate::monitor::Shared>,
 }
 
 type ApiError = (StatusCode, Json<Value>);
@@ -99,7 +100,27 @@ pub fn router(state: AppState) -> Router {
 
 async fn status(State(st): State<AppState>) -> Json<Value> {
     let svc = st.svc.lock().unwrap();
-    Json(json!({ "pages": svc.pages.len(), "stats": svc.stats }))
+    let Some(m) = &st.monitor else {
+        return Json(json!({ "pages": svc.pages.len(), "stats": svc.stats }));
+    };
+    let m = m.lock().unwrap().clone();
+    // Pages we carry that the stream didn't show in the last minute.
+    let now = SystemTime::now();
+    let missing: Vec<String> = m
+        .last_minute
+        .as_ref()
+        .map(|r| {
+            svc.pages
+                .iter()
+                .filter(|(no, p)| !p.expired(now) && !r.pages_seen.contains(&no.to_string()))
+                .map(|(no, _)| no.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    Json(json!({
+        "pages": svc.pages.len(), "stats": svc.stats,
+        "monitor": m, "missing_pages": missing,
+    }))
 }
 
 async fn list_pages(State(st): State<AppState>) -> Json<Value> {
@@ -500,6 +521,7 @@ mod tests {
                 svc: svc.clone(),
                 publishers: Arc::new(publishers),
                 feed: crate::feed::Feed::new(10),
+                monitor: None,
             }),
             svc,
         )

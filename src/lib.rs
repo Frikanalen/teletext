@@ -13,6 +13,7 @@ pub mod enhance;
 pub mod feed;
 pub mod ham;
 pub mod link;
+pub mod monitor;
 pub mod motion;
 pub mod op47;
 pub mod p830;

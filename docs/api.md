@@ -234,6 +234,39 @@ panels.
 `{"pages": n, "stats": {"frames", "carousel_packets", "flash_packets", "subtitle_packets", "filler_packets", "service_data_packets"}}`.
 `frames` goes up by 50 every second while the SDI output runs.
 
+With the return-path monitor on (`[monitor] url = "http://…/frikanalen.ts"`), ttxd reads
+the broadcast transport stream, decodes the teletext in it and adds `monitor` and
+`missing_pages`:
+
+```json
+"monitor": {
+  "url": "http://simula.frikanalen.tv:9094/frikanalen.ts", "connected": true, "error": null,
+  "last_minute": {
+    "at": 1763236800, "teletext_pid": 150, "ts_packets": 41000, "teletext_packets": 15000,
+    "cc_errors": 0, "hamming_errors": 0, "parity_errors": 0,
+    "headers": 2900, "pages_seen": ["100", "101", "888"],
+    "ticks": 60, "tick_min_ms": 960, "tick_max_ms": 1040, "uneven_ticks": 0, "skipped_ticks": 0,
+    "delay_ms": 4200, "teletext_lead_ms": 2100, "video_lead_ms": 900, "last_clock": "21:40:00"
+  }
+},
+"missing_pages": []
+```
+
+- `cc_errors`, `hamming_errors`, `parity_errors`: TS packets lost on the teletext PID,
+  and WST bytes that arrived damaged. All should be 0.
+- `missing_pages`: pages ttxd carries that did not appear in the stream that minute.
+- `tick_*`: time between header clock seconds, by the stream's PTS, so what a player
+  that honours PTS shows. `uneven_ticks` counts ticks more than 250 ms off a second,
+  `skipped_ticks` ticks that jumped or repeated a second.
+- `delay_ms`: when a header is due on screen minus the time its clock shows. The clock
+  is stamped as the frame leaves on SDI, so this is how far the viewer is behind real
+  time, before the player's own buffer.
+- `teletext_lead_ms`, `video_lead_ms`: how far ahead of its PTS each is muxed. A player
+  that shows teletext on arrival instead of at its PTS runs ahead of the picture by the
+  difference, and steps unevenly with the network.
+
+`ttx-monitor <url>` runs the same checks on its own and prints a report each minute.
+
 ### `POST /subtitles`
 
 Subtitles, not schedule pages: `{"lines": ["…"], "page": "888"}`. It takes up to 3 lines
