@@ -78,14 +78,45 @@ first.
 
 | Field | Default | Meaning |
 |---|---|---|
-| `subpages` | required | 1–99 subpages, each a list of row markup (first entry = row 1) |
+| `subpages` | required | 1–99 subpages, each a list of row markup (first entry = row 1), or an object with Level 2.5 data (see below) |
 | `cycle_secs` | 10 | how long each subpage stays up (minimum 1) |
 | `ttl_secs` | none | the page leaves the carousel this long after the PUT. It stays in the store, and `GET /pages` shows `"expired": true` |
 | `flash` | false | send subpage 1 at once, ahead of the carousel, instead of waiting for its turn |
+| `flags` | none | header bits: `{"inhibit_display": true}` (C10) for pages that hold data rather than text, such as DRCS pages; `{"suppress_header": true}` (C7) |
 
 A PUT replaces the whole page, so it is idempotent: sending the same page again does
 nothing harmful. The reply is `{"page":"200","ok":true}`. Stored pages survive a ttxd
 restart.
+
+#### Level 2.5 data
+
+A subpage can also be an object. Every field is optional:
+
+```json
+{
+  "rows": ["{yellow}F R I K A N A L E N"],
+  "raw_rows": { "1": [64, 64, "... 40 values 0-127"] },
+  "x26": [[41, 4, 0], [2, 0, 17], [2, 13, 64]],
+  "packets": [
+    { "packet": 28, "designation": 0, "triplets": [[0, 0, 0], "... up to 13"] },
+    { "packet": 27, "designation": 4, "triplets": ["..."] },
+    { "packet": 27, "designation": 0, "raw": ["... 39 coded bytes"] }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `rows` | row markup, as in the plain form |
+| `raw_rows` | row number (`"1"`–`"24"`) to 40 raw 7-bit codes, replacing that row. ttxd adds the parity. For DRCS and object pages |
+| `x26` | X/26 enhancement triplets `[address, mode, data]` in active-position order, without a termination marker. ttxd merges its own Æ/Ø substitutions into them in position order, Hamming 24/18 codes them, and sends up to 16 packets |
+| `packets` | X/27 and X/28 packets: up to 13 `triplets` (Hamming 24/18 coded by ttxd), or 39 already coded `raw` bytes (for X/27/0–3 links, which are Hamming 8/4) |
+
+The enhancement packets go out after the header and before the rows, in the order X/27,
+X/28, X/26. They go out with every carousel pass and every flash, including row flashes.
+ttxd doesn't interpret them; the generator in `generator/` builds them (see
+`generator/teletext_pages/level25.py`). Older decoders ignore them, so the rows must stand
+on their own as a Level 1 page.
 
 ### `POST /pages/{page}/flash`: change some rows now
 
@@ -142,13 +173,13 @@ cycle faster.
 - To mark what is on air, use `POST /flash` on one or two rows when the programme
   changes. Don't PUT the whole page every minute.
 - Leave row 24 free if you want room for a fastext-style footer later. Fastext links
-  (packet X/27) are not supported yet.
+  are X/27/0 packets, which you can send as `raw` packets.
 - A 40-cell row fits `{cyan}HH:MM{white} ` (7 cells) plus 33 characters of title, so
   shorten long titles yourself. ttxd rejects a row that is too long. It does not
   truncate it.
 
 ## Not in v1 *(proposed)*
 
-- Fastext / X/27 page links, packet 8/30 (network name and time).
+- Packet 8/30 (network name and time), and M/29 magazine-wide enhancements.
 - `If-Match`/ETag on PUT, and bulk PUT of several pages in one request.
 - An OpenAPI document.
