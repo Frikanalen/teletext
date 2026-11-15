@@ -74,13 +74,17 @@ def nibble(v: int) -> int:
     return (v * 15 + 127) // 255
 
 
-def x28_palette(clut3: list[RGB], national: int = 2) -> list[Triplet]:
-    """X/28/0 format 1 for a display page: colour tables 2 (``BRAND``) and 3, Level 1
-    colours remapped onto table 2, ink as the screen and row colour.
+def x28_palette(
+    clut3: list[RGB], national: int = 2, clut2: list[RGB] | None = None
+) -> list[Triplet]:
+    """X/28/0 format 1 for a display page: colour tables 2 (``BRAND`` unless given)
+    and 3, Level 1 colours remapped onto table 2, its black as the screen and row
+    colour.
 
     ``national`` must match the page header's C12-C14 (2 = Swedish/Finnish/Hungarian,
     what ttxd sends), or a Level 2.5 decoder would switch character sets."""
-    colours = BRAND + list(clut3) + [BRAND[0]] * (8 - len(clut3))
+    clut2 = clut2 or BRAND
+    colours = list(clut2) + list(clut3) + [clut2[0]] * (8 - len(clut3))
     b = Bits()
     b.put(0, 4)  # page function: basic level one page
     b.put(0, 3)  # page coding: 7-bit odd parity
@@ -229,20 +233,25 @@ class Graphic:
         self,
         extra: dict[int, list[Triplet]] | None = None,
         blank: set[tuple[int, int]] = frozenset(),
+        row_colours: dict[int, int] | None = None,
     ) -> list[Triplet]:
         """Triplets that draw the graphic: per row, the active position, the DRCS
         subpage when it changes, and per cell a colour change (when needed) and the
         DRCS character. ``extra`` adds column triplets (column, mode, data) to rows,
         merged in column order; they come before the graphic's own in the same cell.
         Cells in ``blank`` that the graphic leaves empty get a space, hiding whatever
-        the Level 1 page has there."""
+        the Level 1 page has there. ``row_colours`` gives rows a full row colour (a
+        palette index), which shows wherever the row's background is transparent."""
         extra = {r: list(t) for r, t in (extra or {}).items()}
         for row, col in blank:
             if (row, col) not in self.cells:
                 extra.setdefault(row, []).append((col, 0x09, 0x20))  # G0 character
         out: list[Triplet] = []
         subcode = 0
-        for row in sorted({r for r, _ in self.cells} | set(extra)):
+        row_colours = row_colours or {}
+        for row in sorted({r for r, _ in self.cells} | set(extra) | set(row_colours)):
+            if row in row_colours:
+                out.append((row_address(row), 0x01, row_colours[row]))  # this row only
             out.append((row_address(row), 0x04, 0))  # set active position: row
             subpages = {
                 t // TILES_PER_DRCS_SUBPAGE for (r, _), (t, _) in self.cells.items() if r == row
@@ -292,33 +301,33 @@ def make_graphic(
     background: RGB,
     first_index: int = 16,
 ) -> Graphic:
-    """Cut ``pic`` into tiles placed from (``top_row``, ``left_col``). Each cell gets
-    the palette colour nearest to the average of its pixels, weighted by how far each
-    is from the background (so soft edges don't drag a colour towards it). Empty cells
-    are left alone; identical tiles are shared."""
+    """Cut ``pic`` into tiles placed from (``top_row``, ``left_col``). A cell has one
+    colour: the palette colour most of its pixels are nearest to, and pixels of any
+    other colour are left out of it. Empty cells are left alone; identical tiles are
+    shared."""
     g = Graphic()
     rows = -(-pic.height // TILE_H)
     cols = -(-pic.width // TILE_W)
     found: dict[tuple[int, int], tuple[tuple[int, ...], int]] = {}
     for cy in range(rows):
         for cx in range(cols):
-            bits = [[False] * TILE_W for _ in range(TILE_H)]
-            total = [0, 0, 0]
-            weight = 0
+            # The palette colour of each pixel, weighted by how far it is from the
+            # background (so soft edges count for less).
+            weights: dict[int, int] = {}
+            pixels = {}
             for y in range(TILE_H):
                 for x in range(TILE_W):
                     px, py = cx * TILE_W + x, cy * TILE_H + y
                     c = pic.pixels[py][px] if py < pic.height and px < pic.width else None
                     if c:
-                        bits[y][x] = True
-                        w = sum(abs(a - b) for a, b in zip(c, background)) ** 2
-                        for i in range(3):
-                            total[i] += c[i] * w
-                        weight += w
-            if not weight:
+                        pixels[(x, y)] = nearest(c, palette)
+                        w = sum(abs(a - b) for a, b in zip(c, background))
+                        weights[pixels[(x, y)]] = weights.get(pixels[(x, y)], 0) + w
+            if not weights:
                 continue
-            mean = (total[0] // weight, total[1] // weight, total[2] // weight)
-            found[(cy, cx)] = (tile_bytes(bits), first_index + nearest(mean, palette))
+            colour = max(weights, key=weights.get)
+            bits = [[pixels.get((x, y)) == colour for x in range(TILE_W)] for y in range(TILE_H)]
+            found[(cy, cx)] = (tile_bytes(bits), first_index + colour)
     # A row can only use tiles from one DRCS subpage, so fill subpages row by row.
     index: dict[tuple[int, ...], int] = {}
     for cy in range(rows):
