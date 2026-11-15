@@ -17,3 +17,10 @@ name = "subtitles"
 token = "change-me-too"
 pages = ["888"]
 subtitles = true
+
+# The studio page generator in generator/ (index on 100).
+[[publisher]]
+name = "studio"
+token = "change-me-studio"
+pages = ["100-1FF"]
+flash_per_sec = 50

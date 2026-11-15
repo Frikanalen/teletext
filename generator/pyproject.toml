@@ -1,0 +1,19 @@
+[project]
+name = "teletext-pages"
+version = "0.1.0"
+description = "Renders Frikanalen's studio teletext pages and pushes them to ttxd"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+ttx-pages = "teletext_pages.main:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["teletext_pages"]
+
+[tool.ruff]
+line-length = 100

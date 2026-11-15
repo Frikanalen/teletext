@@ -14,3 +14,6 @@ curl -XPUT localhost:8080/v1/pages/200 -H 'authorization: Bearer change-me' \
   -H 'content-type: application/json' \
   -d '{"subpages": [["{double}{yellow}Sendeplan", "", "18:00 Nyheter"]]}'
 ```
+
+The studio pages (the index on 100 for now) are rendered by a small Python generator
+in [generator/](generator/README.md), which pushes them to ttxd through this API.

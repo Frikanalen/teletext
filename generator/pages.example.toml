@@ -1,0 +1,26 @@
+# ttx-pages configuration. The token can also come from $TTXD_TOKEN.
+ttxd_url = "http://127.0.0.1:8080"
+token = "change-me-studio"
+api_url = "https://frikanalen.tv/api"
+poll_secs = 30
+refresh_secs = 120
+ttl_secs = 600
+
+[index]
+page = "100"
+tagline = "Frivillige organisasjoners TV-kanal"
+footer = "frikanalen.tv"
+
+# Listed on the index when ttxd is sending the page, or always with always = true.
+[[index.entry]]
+page = "200"
+title = "Sendeplan"
+
+[[index.entry]]
+page = "300"
+title = "Oppslag fra medlemmene"
+
+[[index.entry]]
+page = "888"
+title = "Teksting"
+always = true
