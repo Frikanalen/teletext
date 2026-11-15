@@ -1,0 +1,19 @@
+listen = "0.0.0.0:8080"
+# Raw T42 packets (42 bytes each) for debugging, e.g. `nc host 4242 > dump.t42`.
+t42_listen = "127.0.0.1:4242"
+snapshot = "/var/lib/ttxd/pages.json"
+service_name = "FRIKANALEN"
+# Line numbers in the five OP-47 descriptors.
+op47_lines = [7, 8, 9, 10, 11]
+
+[[publisher]]
+name = "schedule"
+token = "change-me"
+pages = ["200-29F"]
+flash_per_sec = 100
+
+[[publisher]]
+name = "subtitles"
+token = "change-me-too"
+pages = ["888"]
+subtitles = true
