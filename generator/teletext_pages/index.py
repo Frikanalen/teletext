@@ -4,19 +4,20 @@ Layout (row numbers are display rows; ttxd sends the header row itself)::
 
      1-2  FRIKANALEN banner, double height, on blue
      3    tagline, on blue
-     5-7  NÅ: start time, title, organisation (DIREKTE flashes when live)
-     9-11 DERETTER: the same for the next programme
-    13    SIDER
-    14-22 directory, up to 9 entries: "Sendeplan ........200"
+     5-8  NÅ: start time and title (up to two lines), organisation
+          (DIREKTE flashes when live)
+    10-13 DERETTER: the same for the next programme
+    15    SIDER
+    16-22 directory, up to 7 entries: "Sendeplan ........200"
     24    footer band
 """
 
 from dataclasses import dataclass, field
 
-from .markup import COLS, check, fit, leader, plain, spread
+from .markup import COLS, check, fit, leader, plain, spread, wrap
 from .schedule import OSLO, Programme
 
-DIRECTORY_ROWS = 9
+DIRECTORY_ROWS = 7
 TITLE_WIDTH = COLS - 7  # attribute, HH:MM, attribute
 
 
@@ -46,13 +47,14 @@ def _programme(label: str, p: Programme | None, flash: bool) -> list[str]:
         live = "{red}{flash}DIREKTE" if flash else "{red}DIREKTE"
     heading = spread("{cyan}" + label, live)
     if p is None:
-        return [heading, "{white}Ingen program i sendeplanen", ""]
+        return [heading, "{white}Ingen program i sendeplanen", "", ""]
     start = p.start.astimezone(OSLO).strftime("%H:%M")
-    title = "{yellow}" + start + "{white}" + fit(plain(p.title), TITLE_WIDTH)
-    org = ""
+    title = wrap(plain(p.title), TITLE_WIDTH, 2) or [""]
+    rows = ["{yellow}" + start + "{white}" + title[0]]
+    rows += [" " * 6 + "{white}" + line for line in title[1:]]
     if p.organization:
-        org = " " * 6 + "{green}" + fit(plain(p.organization), TITLE_WIDTH)
-    return [heading, title, org]
+        rows.append(" " * 6 + "{green}" + fit(plain(p.organization), TITLE_WIDTH))
+    return [heading, *rows] + [""] * (3 - len(rows))
 
 
 def directory(cfg: IndexConfig, live_pages: set[str] | None) -> list[Entry]:

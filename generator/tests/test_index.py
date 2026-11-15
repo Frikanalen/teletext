@@ -79,12 +79,15 @@ class IndexTest(unittest.TestCase):
         text = [preview(r).rstrip() for r in rows]
         self.assertIn("FRIKANALEN", text[0])
         self.assertTrue(rows[4].endswith("{red}{flash}DIREKTE"))
-        self.assertEqual(text[5], " 18:00 Debatt: Hva skjer med kanalen?")
+        self.assertEqual(text[5], " 18:00 Debatt: Hva skjer med kanalen? En")
+        self.assertEqual(text[6], "       svært lang tittel som må kuttes")
         # Outside text cannot inject markup.
-        self.assertEqual(text[6], "       Frikanalen (red)")
-        self.assertEqual(text[9], " 19:04 Været")
-        self.assertEqual(text[13], " Sendeplan " + "." * 25 + " 200")
-        self.assertEqual(text[14], " Teksting " + "." * 26 + " 888")
+        self.assertEqual(text[7], "       Frikanalen (red)")
+        self.assertEqual(text[10], " 19:04 Været")
+        self.assertEqual(text[11], "")
+        self.assertEqual(text[14], " SIDER")
+        self.assertEqual(text[15], " Sendeplan " + "." * 25 + " 200")
+        self.assertEqual(text[16], " Teksting " + "." * 26 + " 888")
 
     def test_render_empty_schedule(self):
         rows = render(CFG, None, None, [])

@@ -1,6 +1,6 @@
 import unittest
 
-from teletext_pages.markup import COLS, cells, check, fit, leader, plain, preview, spread
+from teletext_pages.markup import COLS, cells, check, fit, leader, plain, preview, spread, wrap
 
 
 class MarkupTest(unittest.TestCase):
@@ -18,6 +18,13 @@ class MarkupTest(unittest.TestCase):
         )
         # A word boundary that would throw away too much is ignored.
         self.assertEqual(fit("Debatt om kommunestyrevalget", 20), "Debatt om kommunest.")
+
+    def test_wrap(self):
+        self.assertEqual(wrap("kort", 10, 2), ["kort"])
+        self.assertEqual(wrap("en to tre fire fem", 9, 2), ["en to tre", "fire fem"])
+        self.assertEqual(wrap("en to tre fire fem seks", 9, 2), ["en to tre", "fire fem."])
+        self.assertEqual(wrap("abcdefghijkl", 5, 2), ["abcde", "fghi."])
+        self.assertEqual(wrap("", 5, 2), [])
 
     def test_spread_right_aligns(self):
         row = spread("{white}A", "B{red}")

@@ -66,6 +66,22 @@ def fit(text: str, width: int) -> str:
     return head if head.endswith((".", "!", "?")) else head + "."
 
 
+def wrap(text: str, width: int, lines: int) -> list[str]:
+    """Break plain text into at most ``lines`` lines of ``width`` cells, at word
+    boundaries where possible. The last line is cut with :func:`fit`."""
+    out: list[str] = []
+    rest = text
+    while rest and len(out) < lines - 1 and len(rest) > width:
+        cut = rest.rfind(" ", 0, width + 1)
+        if cut <= 0:
+            cut = width
+        out.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip()
+    if rest:
+        out.append(fit(rest, width))
+    return out
+
+
 def spread(left: str, right: str) -> str:
     """Pad ``left`` so that ``right`` ends in the last column. Both are markup.
     If they do not fit together, ``right`` is dropped."""
