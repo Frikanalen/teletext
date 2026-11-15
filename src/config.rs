@@ -12,6 +12,12 @@ pub struct Config {
     pub snapshot: PathBuf,
     #[serde(default = "default_name")]
     pub service_name: String,
+    /// Page a decoder shows first; sent in packet 8/30.
+    #[serde(default = "default_initial_page")]
+    pub initial_page: PageNo,
+    /// Network identification code in packet 8/30 (0 = none registered).
+    #[serde(default)]
+    pub network_id: u16,
     /// Line numbers put in the five OP-47 descriptors.
     #[serde(default = "default_lines")]
     pub op47_lines: [u8; 5],
@@ -35,6 +41,9 @@ pub struct Publisher {
     pub pages: Vec<String>,
     #[serde(default)]
     pub subtitles: bool,
+    /// May set the 8/30 status display (e.g. to the programme on air).
+    #[serde(default)]
+    pub status_display: bool,
     /// Flash budget in packets per second (a frame carries 5, so 250/s is the whole line).
     #[serde(default = "default_flash")]
     pub flash_per_sec: f64,
@@ -42,6 +51,9 @@ pub struct Publisher {
 
 fn default_name() -> String {
     "FRIKANALEN".into()
+}
+fn default_initial_page() -> PageNo {
+    PageNo::new(1, 0x00)
 }
 fn default_lines() -> [u8; 5] {
     [7, 8, 9, 10, 11]
@@ -76,6 +88,7 @@ mod tests {
             token: "t".into(),
             pages: vec!["200-29F".into(), "888".into()],
             subtitles: false,
+            status_display: false,
             flash_per_sec: 1.0,
         };
         assert!(p.may_write("200".parse().unwrap()));

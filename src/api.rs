@@ -6,6 +6,7 @@
 //!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets},...], cycle_secs?, ttl_secs?, flash?, flags?}
 //!   DELETE /v1/pages/{page}
 //!   POST   /v1/pages/{page}/flash        replace rows now {rows:{"5":"text"}, subpage?}
+//!   PUT    /v1/status_display            8/30 status line {text}; "" resets to the service name
 //!   POST   /v1/subtitles                 show lines     {lines:["...",...], page?}; [] clears
 //!
 //! Writes need `Authorization: Bearer <token>`; each publisher may only touch its own pages.
@@ -15,7 +16,7 @@ use crate::page::{Content, PageNo, Triplet};
 use crate::service::{PageFlags, Service, StoredPage};
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -77,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/pages/{page}/flash", post(flash))
         .route("/v1/subtitles", post(subtitles))
+        .route("/v1/status_display", put(status_display))
         .with_state(state)
 }
 
@@ -281,6 +283,41 @@ struct Subtitles {
     page: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct StatusDisplay {
+    text: String,
+}
+
+async fn status_display(
+    State(st): State<AppState>,
+    h: HeaderMap,
+    Json(body): Json<StatusDisplay>,
+) -> ApiResult {
+    let p = auth(&st, &h)?;
+    if !p.status_display {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            format!("{} may not set the status display", p.name),
+        ));
+    }
+    if body.text.chars().count() > 20 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "status display is at most 20 characters",
+        ));
+    }
+    let mut svc = st.svc.lock().unwrap();
+    let text = if body.text.is_empty() {
+        svc.service_name.clone()
+    } else {
+        body.text
+    };
+    if let Some(sd) = svc.service_data.as_mut() {
+        sd.status = text;
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
 async fn subtitles(
     State(st): State<AppState>,
     h: HeaderMap,
@@ -317,6 +354,7 @@ mod tests {
             token: "secret".into(),
             pages: vec!["200-29F".into()],
             subtitles: false,
+            status_display: true,
             flash_per_sec: 100.0,
         }];
         (
@@ -396,6 +434,50 @@ mod tests {
         )
         .await;
         assert_eq!(s, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn status_display() {
+        let (app, svc) = app();
+        svc.lock().unwrap().service_data = Some(crate::p830::ServiceData {
+            initial_page: "100".parse().unwrap(),
+            network_id: 0,
+            status: "FRIKANALEN".into(),
+        });
+        let (s, _) = call(
+            &app,
+            "PUT",
+            "/v1/status_display",
+            Some("secret"),
+            json!({ "text": "Nyheter kl 18" }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(
+            svc.lock().unwrap().service_data.as_ref().unwrap().status,
+            "Nyheter kl 18"
+        );
+        let (s, _) = call(
+            &app,
+            "PUT",
+            "/v1/status_display",
+            Some("secret"),
+            json!({ "text": "x".repeat(21) }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        call(
+            &app,
+            "PUT",
+            "/v1/status_display",
+            Some("secret"),
+            json!({ "text": "" }),
+        )
+        .await;
+        assert_eq!(
+            svc.lock().unwrap().service_data.as_ref().unwrap().status,
+            "FRIKANALEN"
+        );
     }
 
     #[tokio::test]

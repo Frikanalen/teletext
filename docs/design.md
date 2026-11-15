@@ -103,7 +103,7 @@ frame. ttxd uses about 2.5% of one core and 19 MB.
 ## Still to verify
 
 - A real TV or set-top box. So far everything was decoded only with libzvbi.
-- Packet 8/30 (network ID and time) is not sent yet.
+- Packet 8/30 is sent but not yet checked against a decoder (libzvbi can show the status display and time).
 - The header clock uses local time, so run ttxd with `TZ=Europe/Oslo`.
 
 ## Deployment

@@ -147,7 +147,7 @@ attributes shown as spaces. Use it to check that your layout fits.
 
 ### `GET /status`
 
-`{"pages": n, "stats": {"frames", "carousel_packets", "flash_packets", "subtitle_packets", "filler_packets"}}`.
+`{"pages": n, "stats": {"frames", "carousel_packets", "flash_packets", "subtitle_packets", "filler_packets", "service_data_packets"}}`.
 `frames` goes up by 50 every second while the SDI output runs.
 
 ### `POST /subtitles`
@@ -155,6 +155,18 @@ attributes shown as spaces. Use it to check that your layout fits.
 Subtitles, not schedule pages: `{"lines": ["…"], "page": "888"}`. It takes up to 3 lines
 of about 35 characters each, and `[]` clears the subtitle. The token needs
 `subtitles = true`.
+
+### `PUT /status_display`
+
+`{"text": "Nyheter kl 18"}` sets the status display in packet 8/30. That's up to 20
+characters, which many decoders show as the channel or programme name. `""` resets it
+to the service name. The token needs `status_display = true`. The value is not kept
+across restarts.
+
+ttxd sends packet 8/30 (format 1) once a second. Besides the status display it carries
+the initial page (`initial_page` in the config, default 100), the network identification
+code (`network_id`, default 0 since Frikanalen has none registered), and the date and
+UTC time with the local offset, which some decoders use to set their clock.
 
 ## Bandwidth
 
@@ -181,6 +193,6 @@ cycle faster.
 
 ## Not in v1 *(proposed)*
 
-- Packet 8/30 (network name and time), and M/29 magazine-wide enhancements.
+- M/29 magazine-wide enhancements, and packet 8/30 format 2 (PDC programme labels).
 - `If-Match`/ETag on PUT, and bulk PUT of several pages in one request.
 - An OpenAPI document.
