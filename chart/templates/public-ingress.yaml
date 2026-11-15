@@ -1,0 +1,29 @@
+{{- if and .Values.public.enabled .Values.public.ingress.enabled }}
+# The web teletext viewer's feed (GET /teletext/feed), on the site's own host so the
+# player reaches it without CORS. Only the public port: the publisher API stays inside
+# the cluster.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ttxd-public
+  labels:
+    {{- include "teletext.labels" . | nindent 4 }}
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    {{- with .Values.public.ingress.certResolver }}
+    traefik.ingress.kubernetes.io/router.tls.certresolver: {{ . | quote }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.public.ingress.className }}
+  rules:
+    - host: {{ required "public.ingress.hostname is required" .Values.public.ingress.hostname | quote }}
+      http:
+        paths:
+          - path: /teletext/
+            pathType: Prefix
+            backend:
+              service:
+                name: ttxd
+                port:
+                  number: {{ .Values.public.port }}
+{{- end }}
