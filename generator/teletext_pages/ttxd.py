@@ -49,6 +49,8 @@ class Ttxd:
         flags: dict | None = None,
         repeat_secs: int | None = None,
         drcs_page: str | None = None,
+        tickers: list[dict] | None = None,
+        animation: dict | None = None,
     ) -> None:
         """Each subpage is a list of markup rows, or a dict with ``rows`` and any of
         ``raw_rows``, ``x26`` and ``packets`` (Level 2.5 data, see docs/api.md)."""
@@ -65,6 +67,12 @@ class Ttxd:
         if drcs_page:
             # ttxd lists it in the magazine's MOT, where decoders look for it.
             body["drcs_page"] = drcs_page
+        if tickers:
+            # Rows ttxd scrolls itself, from its own clock.
+            body["tickers"] = tickers
+        if animation:
+            # Frames ttxd steps through itself (rows, and X/26 triplets for sprites).
+            body["animation"] = animation
         self._call("PUT", f"/v1/pages/{page}", body)
 
     def put_assets(self, assets: dict) -> dict:

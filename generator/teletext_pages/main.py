@@ -100,13 +100,28 @@ class Pusher:
         self.repeat_secs = repeat_secs
         self.drcs_page = drcs_page
         self.sent: list | None = None
+        self.sent_tickers: list[dict] = []
+        self.sent_animation: dict | None = None
+        # Set when ttxd turned the animation down (an older ttxd): do without it.
+        self.no_animation = False
         self.sent_at = 0.0
 
-    def push(self, page: list) -> None:
-        """``page`` is a single subpage (rows or dict) or, as a tuple, several."""
+    def push(
+        self, page: list, tickers: list[dict] | None = None, animation: dict | None = None
+    ) -> None:
+        """``page`` is a single subpage (rows or dict) or, as a tuple, several.
+        ``tickers`` are rows ttxd scrolls and ``animation`` frames it steps through
+        (docs/api.md); a change to them resends the whole page."""
         subpages = list(page) if isinstance(page, tuple) else [page]
+        tickers = tickers or []
+        stale = self.clock() - self.sent_at >= self.refresh_secs
+        if self.no_animation and not stale:
+            # Offered again with each refresh, in case ttxd has been upgraded.
+            animation = None
+        motion = tickers == self.sent_tickers and animation == self.sent_animation
         rows_only = (
             self.sent is not None
+            and motion
             and len(subpages) == len(self.sent) == 1
             and _extras(subpages[0]) == _extras(self.sent[0])
         )
@@ -116,27 +131,44 @@ class Pusher:
             whole = len(changed) > MAX_FLASH_ROWS
         else:
             changed = {}
-            whole = self.sent != subpages
-        stale = self.clock() - self.sent_at >= self.refresh_secs
+            whole = self.sent != subpages or not motion
         try:
             if whole or stale:
                 flash = self.flash and (whole or bool(changed))
-                self.ttxd.put_page(
-                    self.page,
-                    subpages,
-                    ttl_secs=self.ttl_secs,
-                    cycle_secs=self.cycle_secs,
-                    flash=flash,
-                    flags=self.flags,
-                    repeat_secs=self.repeat_secs,
-                    drcs_page=self.drcs_page,
-                )
+
+                def put(animation: dict | None) -> None:
+                    self.ttxd.put_page(
+                        self.page,
+                        subpages,
+                        ttl_secs=self.ttl_secs,
+                        cycle_secs=self.cycle_secs,
+                        flash=flash,
+                        flags=self.flags,
+                        repeat_secs=self.repeat_secs,
+                        drcs_page=self.drcs_page,
+                        tickers=tickers,
+                        animation=animation,
+                    )
+
+                try:
+                    put(animation)
+                    self.no_animation = False
+                except TtxdError as e:
+                    if not animation:
+                        raise
+                    # A ttxd from before animations could carry X/26 turns the
+                    # whole page down. The page matters more than its motion.
+                    put(None)
+                    log.warning("page %s: sent without animation (%s)", self.page, e)
+                    self.no_animation, animation = True, None
                 self.sent_at = self.clock()
                 log.info("page %s sent%s", self.page, " with flash" if flash else "")
             elif changed:
                 self.ttxd.flash_rows(self.page, changed)
                 log.info("page %s rows %s flashed", self.page, sorted(changed))
             self.sent = subpages
+            self.sent_tickers = tickers
+            self.sent_animation = animation
         except TtxdError as e:
             # Start over with a whole page next time; ttxd may have lost it.
             self.sent = None
@@ -202,9 +234,18 @@ class IndexGenerator:
 
     def page(self, at: datetime) -> dict:
         """The index subpage as sent to ttxd."""
+        return self.animated_page(at)[0]
+
+    def animated_page(self, at: datetime) -> tuple[dict, dict | None]:
+        """The index subpage, and ttxd's animation of its sky if there is one."""
         current, upcoming = schedule.now_and_next(self.items, at)
         entries = directory(self.cfg.index, self.live_pages)
-        return index.page(self.cfg.index, current, upcoming, entries, self.look(at), self.shared)
+        return index.animated_page(
+            self.cfg.index, current, upcoming, entries, self.look(at), self.shared
+        )
+
+    def tickers(self, at: datetime) -> list[dict]:
+        return index.ticker(self.cfg.index, schedule.later(self.items, at))
 
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)
@@ -270,7 +311,8 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.index.level25:
             drcs.push(tuple(logo().drcs_subpages()))
             gen.share_assets()
-        pusher.push(gen.page(now))
+        page, animation = gen.animated_page(now)
+        pusher.push(page, gen.tickers(now), animation)
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
         time.sleep(max(delay, 0.1))
 

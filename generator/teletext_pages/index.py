@@ -60,6 +60,12 @@ MARK_X, MARK_Y = 4, 21  # sixels: columns 2-7, rows 8-12
 WORD_X, WORD_Y = 18, 24  # FRIKANALEN: columns 9-36, rows 9-11
 TAGLINE_ROW, TAGLINE_COL = 11, 9  # 0-based row; the text lines up with the lettering
 NOW_ROW, NEXT_ROW, BUTTON_ROW = 12, 17, 22
+# The row between the programmes and the colour keys (as ttxd counts rows, from 1),
+# where what comes later scrolls by.
+TICKER_ROW = 22
+# The label ends by setting the colour of whatever text has scrolled up to it.
+TICKER_LABEL = "{cyan}SENERE{white}"
+TICKER_SPEED = 4
 TITLE_COL = 8
 TITLE_WIDTH = COLS - TITLE_COL
 # Level 2.5: the real logo over the block one. Mark on rows 8-12 from column 2,
@@ -115,6 +121,12 @@ class IndexConfig:
     # number needs tens digit 0 and a hex units digit so nobody can key it in.
     level25: bool = True
     drcs_page: str = "10F"
+    # Scroll the programmes after the next one along the row above the colour keys.
+    ticker: bool = True
+    # Level 2.5: let the stars twinkle and the rain and snow fall, a step every
+    # ``sprite_ms`` (ttxd swaps the page's X/26 triplets, see docs/api.md).
+    sprites: bool = True
+    sprite_ms: int = 500
     # Where the sky is, and whether to ask MET Norway for its weather.
     latitude: float = 59.91
     longitude: float = 10.75
@@ -241,6 +253,22 @@ def render(
     return check(picture(cfg, current, upcoming, entries, at).markup())
 
 
+def ticker(cfg: IndexConfig, later: list[Programme]) -> list[dict]:
+    """ttxd's ``tickers`` for the page: the programmes after the next one, scrolling
+    along the row above the colour keys. ttxd moves it; the page is sent as usual."""
+    if not cfg.ticker or not later:
+        return []
+    parts = [f"{{yellow}}{p.start.astimezone(OSLO):%H:%M}{{white}}{plain(p.title)}" for p in later]
+    return [
+        {
+            "row": TICKER_ROW,
+            "prefix": TICKER_LABEL,
+            "text": " ".join(parts) + " ",
+            "cells_per_sec": TICKER_SPEED,
+        }
+    ]
+
+
 def fastext(cfg: IndexConfig, entries: list[Entry]) -> dict:
     """The X/27/0 packet linking the colour keys to the button pages."""
     pages = [e.page.upper() for e in entries[:BUTTONS]]
@@ -331,6 +359,35 @@ SMALL_GLYPHS = {
     ],
 }
 SMALL_COLOURS = {"star": WHITE, "rain": CYAN, "snow": WHITE}
+# The same things as sprites: a small flake and a short streak at three heights in
+# the cell, so that they fall a few pixels a step and then move on to the cell below.
+FLAKE = ["....#.#.....", ".....#......", "...#####....", ".....#......", "....#.#....."]
+STREAK = [".......##...", "......##....", ".....##.....", "....##......"]
+
+
+def _at_height(shape: list[str], top: int) -> list[str]:
+    blank = ["." * 12]
+    return blank * top + shape + blank * (10 - top - len(shape))
+
+
+for _i, _top in enumerate((0, 3, 5)):
+    SMALL_GLYPHS[f"snow-{_i}"] = _at_height(FLAKE, _top)
+for _i, _top in enumerate((0, 3, 6)):
+    SMALL_GLYPHS[f"rain-{_i}"] = _at_height(STREAK, _top)
+# A sprite's cycle is this many frames: three heights in its own cell, three in the
+# cell below. Rain takes two heights a frame. A star is mostly bright.
+SPRITE_FRAMES = 6
+FALL_SPEED = {"snow": 1, "rain": 2}
+TWINKLE = [0, 0, 0, 1, 2, 1]
+
+
+@dataclass(frozen=True)
+class Sprite:
+    row: int  # display row, from 1
+    col: int
+    kind: str
+    seed: int
+    falls: bool  # the cell below is empty sky in its colour, so it can move there
 
 
 def assets() -> dict:
@@ -348,11 +405,11 @@ def assets() -> dict:
 
 def _finer(
     rows: list[str], small: dict[tuple[int, int], str], glyphs: dict[str, int]
-) -> tuple[dict[int, list[level25.Triplet]], dict[int, list[level25.Triplet]]]:
-    """Shared glyphs over cells of the Level 1 page, as X/26 triplets by display row:
-    first the slanted ends of the heading tabs and the key chips, then the sky's
-    stars, drops and flakes. A glyph takes the colours the cell already has, so only
-    cells whose mosaic is nothing but that shape qualify."""
+) -> tuple[dict[int, list[level25.Triplet]], dict[int, list[Sprite]]]:
+    """Shared glyphs over cells of the Level 1 page: first the slanted ends of the
+    heading tabs and the key chips, as X/26 triplets by display row, then the sky's
+    stars, drops and flakes as sprites by display row. A glyph takes the colours the
+    cell already has, so only cells whose mosaic is nothing but that shape qualify."""
     slants: dict[int, list[level25.Triplet]] = {}
     for row in (NOW_ROW, NEXT_ROW, BUTTON_ROW):
         for col, (bits, _, _) in enumerate(art.shown(rows[row])):
@@ -366,9 +423,10 @@ def _finer(
                 cut = [(col, 0x00, level25.INK), (col, 0x0D, glyphs["slant-lr"])]
                 slants.setdefault(BUTTON_ROW + 1, []).extend(cut)
         slants.get(BUTTON_ROW + 1, []).sort()
-    sky_cells: dict[int, list[level25.Triplet]] = {}
+    cells = [art.shown(rows[row]) for row in range(sky.ROWS)]
+    found: list[tuple[int, int, str, int]] = []
     for row in range(sky.ROWS):
-        for col, (bits, fg, bg) in enumerate(art.shown(rows[row])):
+        for col, (bits, fg, bg) in enumerate(cells[row]):
             if not bits or bg != BLACK:
                 continue
             lit = [(col * 2 + x, row * 3 + y) for x, y, bit in art._BITS if bits & bit]
@@ -376,10 +434,51 @@ def _finer(
             if len(kinds) != 1 or None in kinds:
                 continue
             (kind,) = kinds
-            name = f"star-{(lit[0][0] * 7 + lit[0][1] * 3) % 3}" if kind == "star" else kind
-            if fg == SMALL_COLOURS[kind] and name in glyphs:
-                sky_cells.setdefault(row + 1, []).append((col, 0x0D, glyphs[name]))
-    return slants, sky_cells
+            if fg == SMALL_COLOURS[kind]:
+                found.append((row, col, kind, lit[0][0] * 7 + lit[0][1] * 3))
+    sprites: dict[int, list[Sprite]] = {}
+    for row, col, kind, seed in found:
+        # It can fall into the cell below if that is empty sky that would draw in
+        # its colour (a glyph takes the cell's colours).
+        falls = (
+            kind in FALL_SPEED
+            and row + 1 < sky.ROWS
+            and cells[row + 1][col] == (0, SMALL_COLOURS[kind], BLACK)
+        )
+        sprites.setdefault(row + 1, []).append(Sprite(row + 1, col, kind, seed, falls))
+    return slants, sprites
+
+
+def _sky_frame(
+    sprites: dict[int, list[Sprite]], glyphs: dict[str, int], frame: int | None
+) -> dict[int, list[level25.Triplet]]:
+    """The sprites as X/26 triplets by display row: standing still (``frame`` None),
+    or as they are in one frame of their cycle."""
+    out: dict[int, list[level25.Triplet]] = {}
+
+    def put(row: int, col: int, name: str) -> None:
+        if name in glyphs:
+            out.setdefault(row, []).append((col, 0x0D, glyphs[name]))
+
+    for s in (s for group in sprites.values() for s in group):
+        if frame is None:
+            put(s.row, s.col, f"star-{s.seed % 3}" if s.kind == "star" else s.kind)
+        elif s.kind == "star":
+            put(s.row, s.col, f"star-{TWINKLE[(frame + s.seed) % SPRITE_FRAMES]}")
+        else:
+            step = ((frame + s.seed) * FALL_SPEED[s.kind]) % SPRITE_FRAMES
+            if step < 3 or not s.falls:
+                put(s.row, s.col, f"{s.kind}-{step % 3}")
+            else:
+                # Gone from its own cell (an empty mosaic over the Level 1 one) and
+                # into the one below.
+                out.setdefault(s.row, []).append((s.col, 0x01, 0x20))
+                put(s.row + 1, s.col, f"{s.kind}-{step - 3}")
+    return out
+
+
+def _animated(glyphs: dict[str, int]) -> bool:
+    return all(f"{kind}-{i}" in glyphs for kind in FALL_SPEED for i in range(3))
 
 
 def _block_logo_cells() -> set[tuple[int, int]]:
@@ -448,26 +547,40 @@ def enhancements(
             if token == "{blackbg}":
                 backgrounds[row].append((col, 0x03, colour))
     keys = _key_colours(rows)
+    frames: list[list[level25.Triplet]] = []
     objects = (shared or {}).get("objects", {})
     if LOGO_OBJECT in objects:
         # The logo is a shared object: two triplets, wherever it is placed. That
         # leaves room to draw slants and the sky's small things with shared glyphs.
         place = {(LOGO_ROW, LOGO_COL): tuple(objects[LOGO_OBJECT])}
-        slants, sky_cells = _finer(rows, small or {}, shared.get("glyphs", {}))
+        glyphs = shared.get("glyphs", {})
+        slants, sprites = _finer(rows, small or {}, glyphs)
+        moving = cfg.sprites and _animated(glyphs)
         budget = MAX_TRIPLETS - len(
             level25.page_x26(_merge(backgrounds, keys, slants), row_colours, place)
         )
-        for row in sorted(sky_cells):
-            # Each row costs its glyphs; stop when the packets are full.
-            if len(sky_cells[row]) > budget:
+        for row in sorted(sprites):
+            # Each row costs its glyphs, and one more for each that can leave its
+            # cell; stop when the packets are full.
+            cost = len(sprites[row]) + sum(s.falls for s in sprites[row]) * moving
+            if cost > budget:
+                sprites = {r: group for r, group in sprites.items() if r < row}
                 break
-            budget -= len(sky_cells[row])
-            slants = _merge(slants, {row: sky_cells[row]})
+            budget -= cost
         keys = _merge(keys, slants)
         # libzvbi loses the row's background in the cell before a placement unless
         # it is set again there.
         backgrounds[LOGO_ROW].append((LOGO_COL - 1, 0x03, SKY_COLOUR + LOGO_ROW - 1))
-        x26 = level25.page_x26(_merge(backgrounds, keys), row_colours, place)
+
+        def with_sky(frame: int | None) -> list[level25.Triplet]:
+            cells = _sky_frame(sprites, glyphs, frame)
+            return level25.page_x26(_merge(backgrounds, keys, cells), row_colours, place)
+
+        if moving and sprites:
+            frames = [with_sky(frame) for frame in range(SPRITE_FRAMES)]
+            x26 = frames[0]
+        else:
+            x26 = with_sky(None)
     else:
         blank = _block_logo_cells()
         x26 = logo().x26(extra=backgrounds | keys, blank=blank, row_colours=row_colours)
@@ -478,6 +591,8 @@ def enhancements(
     palette = level25.x28_palette(sky.gradient(at), clut2=PALETTE)
     return {
         "x26": x26,
+        # The same triplets with the sky's sprites a step on, one list per frame.
+        "frames": frames,
         # No X/27/4 link to the DRCS page: ttxd puts it in the magazine's MOT
         # (drcs_page on the PUT), which leaves the MOT's global links in force.
         "packets": [{"packet": 28, "designation": 0, "triplets": palette}],
@@ -494,11 +609,31 @@ def page(
 ) -> dict:
     """The index subpage as sent to ttxd: rows, the fastext links, and Level 2.5 data
     if enabled."""
+    return animated_page(cfg, current, upcoming, entries, at, shared)[0]
+
+
+def animated_page(
+    cfg: IndexConfig,
+    current: Programme | None,
+    upcoming: Programme | None,
+    entries: list[Entry],
+    at: sky.Look,
+    shared: dict | None = None,
+) -> tuple[dict, dict | None]:
+    """The index subpage, and ttxd's ``animation`` for it if the sky has sprites to
+    move: frames that change no rows, each with the page's X/26 triplets a step on."""
     pic, small = _picture(cfg, current, upcoming, entries, at)
     rows = check(pic.markup())
     out = {"rows": rows, "packets": [fastext(cfg, entries)]}
+    animation = None
     if cfg.level25:
         extra = enhancements(cfg, rows, at, shared, small)
         out["x26"] = extra["x26"]
         out["packets"] += extra["packets"]
-    return out
+        if extra["frames"]:
+            animation = {
+                "frame_ms": max(80, cfg.sprite_ms),
+                "frames": [{} for _ in extra["frames"]],
+                "x26": extra["frames"],
+            }
+    return out, animation

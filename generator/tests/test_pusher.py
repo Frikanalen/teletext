@@ -8,10 +8,13 @@ class FakeTtxd:
     def __init__(self):
         self.calls = []
         self.fail = False
+        self.old = False  # a ttxd that turns animations down
+        self.animations = []
 
     def put_page(self, page, subpages, *, ttl_secs, flash=False, **more):
-        if self.fail:
+        if self.fail or (self.old and more.get("animation")):
             raise TtxdError("down")
+        self.animations.append(more.get("animation"))
         self.calls.append(("put", page, flash, ttl_secs))
 
     def flash_rows(self, page, rows, subpage=0):
@@ -58,6 +61,26 @@ class PusherTest(unittest.TestCase):
         self.t = 20
         self.p.push({"rows": ["b"], "x26": [(42, 4, 0)]})
         self.assertEqual(self.ttxd.calls[2], ("put", "100", True, 600))
+
+    def test_ticker_change_resends_the_page(self):
+        tick = [{"row": 22, "text": "20:00 Nyheter "}]
+        self.p.push(["a"], tick)
+        self.p.push(["a"], tick)
+        self.p.push(["a"], [{"row": 22, "text": "21:00 Film "}])
+        self.assertEqual([c[0] for c in self.ttxd.calls], ["put", "put"])
+
+    def test_animation_is_dropped_for_a_ttxd_that_refuses_it(self):
+        anim = {"frame_ms": 500, "frames": [{}, {}], "x26": [[], [[0, 13, 1]]]}
+        self.ttxd.old = True
+        self.p.push(["a"], None, anim)
+        self.p.push(["a"], None, anim)
+        self.assertEqual(self.ttxd.animations, [None])
+        # Offered again with the next refresh, and kept once ttxd takes it.
+        self.ttxd.old = False
+        self.t = 130
+        self.p.push(["a"], None, anim)
+        self.p.push(["a"], None, anim)
+        self.assertEqual(self.ttxd.animations, [None, anim])
 
     def test_several_subpages(self):
         self.p.push((["a"], ["b"]))

@@ -113,12 +113,17 @@ ttxd can move rows itself, from its own frame clock, so a publisher sends the pa
 |---|---|
 | `tickers` | rows whose `text` scrolls right to left at `cells_per_sec` (1–12, default 4), with `prefix` fixed at the left. Text that fits in the row stands still. Æ/Ø and other markup scroll along |
 | `animation` | rows that step through `frames` every `frame_ms` (at least 80). Each frame maps row numbers to markup, like a flash |
+| `animation.x26` | optional: one list of X/26 triplets per frame (as many lists as `frames`). At each step the frame's list takes the place of the subpage's `x26`, so Level 2.5 overlays can change glyph and move a cell at a time, like sprites. A frame that changes no rows is `{}` |
 
 Each step goes out as a row update (the header and the changed rows, no erase), so the
 screen doesn't blank. It counts against the publisher's flash budget: a ticker at 6
-cells/s costs about 12 packets/s. Over budget, steps are delayed, not dropped. Motion
+cells/s costs about 12 packets/s, plus the page's X/26-28 packets with every step (they
+always go along, which is also what makes `animation.x26` frames show). A sprite that
+moves uncovers whatever Level 1 character was under it, so keep those cells blank or
+blank them with a triplet. Over budget, steps are delayed, not dropped. Motion
 runs on the subpage on screen, stops while the page is expired, and starts again from
-the beginning when the page is PUT again. The web viewer's feed gets the moving rows as
+the beginning when the page is PUT with different `tickers` or `animation`; a PUT that
+leaves them as they were keeps its place. The web viewer's feed gets the moving rows as
 `page` events, at most 4 a second.
 
 #### Level 2.5 data

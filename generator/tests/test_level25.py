@@ -4,7 +4,16 @@ from datetime import datetime
 
 from teletext_pages import level25 as L
 from teletext_pages import sky
-from teletext_pages.index import MAX_TRIPLETS, Entry, IndexConfig, assets, logo, page
+from teletext_pages.index import (
+    MAX_TRIPLETS,
+    SPRITE_FRAMES,
+    Entry,
+    IndexConfig,
+    animated_page,
+    assets,
+    logo,
+    page,
+)
 from teletext_pages.schedule import OSLO
 
 
@@ -144,6 +153,44 @@ class IndexLogoTest(unittest.TestCase):
         self.assertGreater(sum(d in stars for d in drawn), 5)
         slants = {n for name, n in glyphs.items() if name.startswith("slant")}
         self.assertEqual(sum(d in slants for d in drawn), 2 + 2 * 4)  # tabs, chip ends
+
+    def test_sky_sprites(self):
+        cfg = IndexConfig(entries=[Entry(str(n), "Side") for n in (200, 300, 400, 888)])
+        glyphs = {g["name"]: n for n, g in enumerate(assets()["glyphs"])}
+        shared = {"objects": {"logo": [56, 18, 0]}, "glyphs": glyphs}
+        snow = sky.look(datetime(2026, 11, 15, 19, 0, tzinfo=OSLO), sky.Weather(3, snow=True))
+        subpage, animation = animated_page(cfg, None, None, cfg.entries, snow, shared)
+        # Frames that change no rows, each with the page's triplets a step on; the
+        # page itself starts as the first frame.
+        self.assertEqual(animation["frames"], [{}] * SPRITE_FRAMES)
+        self.assertEqual(animation["frame_ms"], cfg.sprite_ms)
+        frames = animation["x26"]
+        self.assertEqual(subpage["x26"], frames[0])
+        self.assertGreater(len({tuple(f) for f in frames}), 2)
+        flakes = {glyphs[f"snow-{n}"] for n in range(3)}
+        blanked = 0
+        for f in frames:
+            self.assertLessEqual(len(f), MAX_TRIPLETS)
+            self.assertGreater(sum(m == 0x0D and d in flakes for _, m, d in f), 5)
+            blanked += sum((m, d) == (0x01, 0x20) for _, m, d in f)
+            # Only the sky's sprites differ from frame to frame.
+            still = [t for t in f if not (t[1] == 0x0D and t[2] in flakes) and t[1:] != (1, 0x20)]
+            self.assertEqual(
+                still,
+                [
+                    t
+                    for t in frames[0]
+                    if not (t[1] == 0x0D and t[2] in flakes) and t[1:] != (1, 0x20)
+                ],
+            )
+        # Some flakes leave their cell for the one below, and blank their own.
+        self.assertGreater(blanked, 0)
+        # Without sprites, or without the glyphs for them, the sky stands still.
+        cfg.sprites = False
+        self.assertIsNone(animated_page(cfg, None, None, cfg.entries, snow, shared)[1])
+        cfg.sprites = True
+        old = {"objects": shared["objects"], "glyphs": {"snow": 0, "star-0": 1}}
+        self.assertIsNone(animated_page(cfg, None, None, cfg.entries, snow, old)[1])
 
     def test_logo_as_an_object(self):
         g = logo()

@@ -3,7 +3,7 @@
 //! (header plus the changed rows, no erase), paid for from the page owner's flash
 //! budget like any other flash. Over budget, steps are delayed, never dropped.
 
-use crate::page::{COLS, parse_cells};
+use crate::page::{COLS, Triplet, parse_cells};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
@@ -32,10 +32,16 @@ fn default_speed() -> f64 {
 }
 
 /// Rows that cycle through frames: each frame maps row numbers ("1"-"24") to markup.
+/// With `x26`, each frame also has its own X/26 triplets, which take the place of the
+/// subpage's: that is how Level 2.5 overlays (DRCS glyphs, colours) change shape and
+/// move like sprites. A frame may then have no rows at all.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Animation {
     pub frames: Vec<BTreeMap<String, String>>,
+    /// One triplet list per frame, or empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub x26: Vec<Vec<Triplet>>,
     /// Milliseconds per frame, at least 80.
     pub frame_ms: u64,
 }
@@ -111,6 +117,9 @@ impl Animation {
         if self.frame_ms < MIN_STEP.as_millis() as u64 {
             return Err(format!("frame_ms is at least {}", MIN_STEP.as_millis()));
         }
+        if !self.x26.is_empty() && self.x26.len() != self.frames.len() {
+            return Err("animation x26 needs one triplet list per frame".into());
+        }
         for f in &self.frames {
             for (row, markup) in f {
                 let r: u8 = row.parse().map_err(|_| format!("bad row number {row:?}"))?;
@@ -127,15 +136,24 @@ impl Animation {
     }
 }
 
-/// Advance a page's motion to `now`. Returns the rows to change (empty if no step is
-/// due), as markup-free codes.
+/// What one step of a page's motion changes.
+#[derive(Debug, Default, PartialEq)]
+pub struct Step {
+    /// Rows to replace, as markup-free codes.
+    pub rows: BTreeMap<u8, RowCodes>,
+    /// The X/26 triplets to replace the subpage's with, if the animation has any.
+    pub x26: Option<Vec<Triplet>>,
+}
+
+/// Advance a page's motion to `now`. None if no step is due.
 pub fn advance(
     tickers: &[Ticker],
     animation: Option<&Animation>,
     st: &mut MotionState,
     now: SystemTime,
-) -> BTreeMap<u8, RowCodes> {
+) -> Option<Step> {
     let mut out = BTreeMap::new();
+    let mut x26 = None;
     st.tickers.resize(tickers.len(), (None, 0));
     let mut due = false;
     for (t, (next, offset)) in tickers.iter().zip(st.tickers.iter_mut()) {
@@ -170,12 +188,14 @@ pub fn advance(
         }
     }
     if !due {
-        return out;
+        return None;
     }
     // Every motion row goes in each step, so a step that replaces a queued one loses
     // nothing.
     if let Some(a) = animation {
-        for (row, markup) in &a.frames[st.animation.1 % a.frames.len()] {
+        let frame = st.animation.1 % a.frames.len();
+        x26 = a.x26.get(frame).cloned();
+        for (row, markup) in &a.frames[frame] {
             if let (Ok(r), Ok((mut codes, g2))) = (row.parse::<u8>(), parse_cells(markup)) {
                 codes.resize(COLS, b' ');
                 out.insert(r, (codes, g2));
@@ -185,7 +205,7 @@ pub fn advance(
     for (t, (_, offset)) in tickers.iter().zip(&st.tickers) {
         out.insert(t.row, t.row_at(*offset));
     }
-    out
+    Some(Step { rows: out, x26 })
 }
 
 #[cfg(test)]
@@ -253,10 +273,13 @@ mod tests {
                 BTreeMap::from([("5".into(), "A".into())]),
                 BTreeMap::from([("5".into(), "B".into())]),
             ],
+            x26: vec![vec![(1, 0x0D, 0)], vec![(2, 0x0D, 1)]],
             frame_ms: 500,
         };
         let mut st = MotionState::default();
-        let first = advance(&tickers, Some(&anim), &mut st, t0);
+        let first = advance(&tickers, Some(&anim), &mut st, t0).unwrap();
+        assert_eq!(first.x26, Some(vec![(1, 0x0D, 0)]));
+        let first = first.rows;
         assert_eq!(first.keys().copied().collect::<Vec<_>>(), vec![3, 5]);
         assert_eq!(first[&5].0[0], b'A');
         assert!(
@@ -266,22 +289,25 @@ mod tests {
                 &mut st,
                 t0 + Duration::from_millis(100)
             )
-            .is_empty()
+            .is_none()
         );
         let s = advance(
             &tickers,
             Some(&anim),
             &mut st,
             t0 + Duration::from_millis(250),
-        );
-        assert_eq!(s[&5].0[0], b'A'); // ticker stepped, frame not yet
+        )
+        .unwrap();
+        assert_eq!(s.rows[&5].0[0], b'A'); // ticker stepped, frame not yet
         let s = advance(
             &tickers,
             Some(&anim),
             &mut st,
             t0 + Duration::from_millis(500),
-        );
-        assert_eq!(s[&5].0[0], b'B');
+        )
+        .unwrap();
+        assert_eq!(s.rows[&5].0[0], b'B');
+        assert_eq!(s.x26, Some(vec![(2, 0x0D, 1)]));
     }
 
     #[test]
@@ -298,12 +324,20 @@ mod tests {
         assert!(t.validate().is_err());
         let a = Animation {
             frames: vec![],
+            x26: vec![],
             frame_ms: 500,
         };
         assert!(a.validate().is_err());
         let a = Animation {
             frames: vec![BTreeMap::from([("1".into(), "x".into())])],
+            x26: vec![],
             frame_ms: 10,
+        };
+        assert!(a.validate().is_err());
+        let a = Animation {
+            frames: vec![BTreeMap::new(), BTreeMap::new()],
+            x26: vec![vec![]],
+            frame_ms: 500,
         };
         assert!(a.validate().is_err());
     }

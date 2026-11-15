@@ -304,6 +304,17 @@ async fn put_page(
         .map(|s| s.content(no, &layout))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    if let Some(a) = &body.animation {
+        a.validate().map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+        // Each frame's triplets must fit on every subpage, beside its Æ/Ø.
+        for x26 in &a.x26 {
+            for c in &subpages {
+                c.clone()
+                    .set_x26(x26.clone())
+                    .map_err(|e| err(StatusCode::BAD_REQUEST, format!("animation x26: {e}")))?;
+            }
+        }
+    }
     let now = SystemTime::now();
     let mut stored = StoredPage::new(
         &publisher.name,
@@ -316,9 +327,6 @@ async fn put_page(
     stored.repeat_secs = body.repeat_secs;
     for t in &body.tickers {
         t.validate().map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
-    }
-    if let Some(a) = &body.animation {
-        a.validate().map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
     }
     stored.tickers = body.tickers;
     stored.animation = body.animation;
