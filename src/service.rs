@@ -463,15 +463,15 @@ impl Service {
             if (page.tickers.is_empty() && page.animation.is_none()) || page.expired(now) {
                 continue;
             }
-            let rows = crate::motion::advance(
+            let Some(step) = crate::motion::advance(
                 &page.tickers,
                 page.animation.as_ref(),
                 &mut page.motion,
                 now,
-            );
-            if rows.is_empty() {
+            ) else {
                 continue;
-            }
+            };
+            let rows = step.rows;
             let sub = page.sub_idx % page.subpages.len().max(1);
             let Some(content) = page.subpages.get_mut(sub) else {
                 continue;
@@ -482,6 +482,10 @@ impl Service {
                 content.g2.extend(g2.iter().map(|&(c, g)| (r, c, g)));
             }
             content.g2.sort();
+            if let Some(x26) = step.x26 {
+                // Checked against every subpage when the page was stored.
+                content.x26 = x26;
+            }
             flashes.push((*no, sub, rows.keys().copied().collect::<Vec<u8>>()));
         }
         for (no, sub, rows) in flashes {
@@ -1115,5 +1119,37 @@ mod tests {
         again.tickers[0].cells_per_sec = 5.0;
         s.put_page(no, again, false);
         assert_ne!(format!("{:?}", s.pages[&no].motion), at);
+    }
+
+    #[test]
+    fn animation_frames_swap_the_x26_triplets() {
+        let mut s = svc_with(&["200"]);
+        let no: PageNo = "200".parse().unwrap();
+        s.set_flash_budget("t", 100.0);
+        let page = s.pages.get_mut(&no).unwrap();
+        page.owner = "t".into();
+        page.animation = Some(crate::motion::Animation {
+            frames: vec![BTreeMap::new(), BTreeMap::new()],
+            x26: vec![
+                vec![(41, 0x04, 0), (3, 0x0D, 1)],
+                vec![(42, 0x04, 0), (3, 0x0D, 2)],
+            ],
+            frame_ms: 200,
+        });
+        let start = SystemTime::now();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut stored = std::collections::BTreeSet::new();
+        for f in 0..100u64 {
+            for p in s.next_frame(start + Duration::from_millis(20 * f)) {
+                if row_of(&p) == 26 && mag_of(&p) == 2 {
+                    seen.insert(p[2..].to_vec());
+                }
+            }
+            stored.insert(s.pages[&no].subpages[0].x26.clone());
+        }
+        // Both frames went out as X/26 packets, and the stored page follows along
+        // (so the carousel, the preview and the web feed show the frame on screen).
+        assert_eq!(seen.len(), 2);
+        assert_eq!(stored.len(), 2);
     }
 }
