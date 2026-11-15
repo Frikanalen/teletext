@@ -168,6 +168,27 @@ the initial page (`initial_page` in the config, default 100), the network identi
 code (`network_id`, default 0 since Frikanalen has none registered), and the date and
 UTC time with the local offset, which some decoders use to set their clock.
 
+## Public feed for the web viewer
+
+A second listener (`public_listen`, port 8081 by convention) serves one read-only route,
+`GET /teletext/feed`, as Server-Sent Events. It has no write routes and is the only part
+of ttxd that goes through the public ingress. Pages travel as the T42 packets a decoder
+receives (42 bytes each: magazine/row address and 40 data bytes, Hamming and parity as
+sent), so the browser decodes the same bytes a TV does. Each subpage or subtitle cue is
+the base64 of its packets, one after the other.
+
+| Event | `data` |
+|---|---|
+| `snapshot` | `{t, pages: [Page]}`: every page that hasn't expired. Sent on connect, and again if the client falls behind |
+| `page` | `Page`: a page was stored or had rows flashed |
+| `delete` | `{page}` |
+| `subtitle` | `{page, t, packets}`: a cue; one with no rows clears the screen |
+
+`Page` is `{page, cycle_secs, expires, subpages: [base64]}`. `t` and `expires` are Unix
+milliseconds. A web player is some seconds behind air, so it holds each cue until its
+stream reaches `t`. `public_max_clients` (default 1000) caps viewers; past that the feed
+answers 503.
+
 ## Bandwidth
 
 The whole service has about 250 packets/s, and a full page is about 26 packets. With N

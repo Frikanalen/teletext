@@ -28,6 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct AppState {
     pub svc: Arc<Mutex<Service>>,
     pub publishers: Arc<Vec<Publisher>>,
+    pub feed: crate::feed::Feed,
 }
 
 type ApiError = (StatusCode, Json<Value>);
@@ -237,7 +238,9 @@ async fn put_page(
     );
     stored.flags = body.flags;
     stored.repeat_secs = body.repeat_secs;
-    st.svc.lock().unwrap().put_page(no, stored, body.flash);
+    let mut svc = st.svc.lock().unwrap();
+    svc.put_page(no, stored, body.flash);
+    st.feed.page(&svc, no);
     Ok(Json(json!({ "page": no.to_string(), "ok": true })))
 }
 
@@ -249,7 +252,10 @@ async fn delete_page(
     let no = parse_page(&page)?;
     auth_page(&st, &h, no)?;
     match st.svc.lock().unwrap().delete_page(no) {
-        Some(_) => Ok(Json(json!({ "ok": true }))),
+        Some(_) => {
+            st.feed.delete(no);
+            Ok(Json(json!({ "ok": true })))
+        }
         None => Err(err(StatusCode::NOT_FOUND, "no such page")),
     }
 }
@@ -269,11 +275,10 @@ async fn flash(
 ) -> ApiResult {
     let no = parse_page(&page)?;
     auth_page(&st, &h, no)?;
-    st.svc
-        .lock()
-        .unwrap()
-        .flash_rows(no, body.subpage, &body.rows, SystemTime::now())
+    let mut svc = st.svc.lock().unwrap();
+    svc.flash_rows(no, body.subpage, &body.rows, SystemTime::now())
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    st.feed.page(&svc, no);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -331,11 +336,10 @@ async fn subtitles(
         ));
     }
     let no = parse_page(body.page.as_deref().unwrap_or("888"))?;
-    st.svc
-        .lock()
-        .unwrap()
-        .subtitle(no, &body.lines)
+    let mut svc = st.svc.lock().unwrap();
+    svc.subtitle(no, &body.lines)
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    st.feed.subtitle(&svc, no, &body.lines);
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -361,6 +365,7 @@ mod tests {
             router(AppState {
                 svc: svc.clone(),
                 publishers: Arc::new(publishers),
+                feed: crate::feed::Feed::new(10),
             }),
             svc,
         )

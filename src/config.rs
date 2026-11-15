@@ -8,6 +8,11 @@ pub struct Config {
     pub listen: String,
     /// Raw T42 packet stream for debugging (42-byte records), e.g. "127.0.0.1:4242".
     pub t42_listen: Option<String>,
+    /// Public read-only feed for the web viewer (GET /teletext/feed), e.g. "0.0.0.0:8081".
+    pub public_listen: Option<String>,
+    /// Most viewers the public feed serves at once.
+    #[serde(default = "default_feed_clients")]
+    pub public_max_clients: usize,
     /// Where pages are kept across restarts.
     pub snapshot: PathBuf,
     #[serde(default = "default_name")]
@@ -49,6 +54,9 @@ pub struct Publisher {
     pub flash_per_sec: f64,
 }
 
+fn default_feed_clients() -> usize {
+    1000
+}
 fn default_name() -> String {
     "FRIKANALEN".into()
 }

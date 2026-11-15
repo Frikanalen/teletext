@@ -1,6 +1,9 @@
 listen = "0.0.0.0:8080"
 # Raw T42 packets (42 bytes each) for debugging, e.g. `nc host 4242 > dump.t42`.
 t42_listen = "127.0.0.1:4242"
+# Public read-only feed for the web viewer (GET /teletext/feed, Server-Sent Events).
+# Expose this one through the public ingress, never the API port.
+public_listen = "0.0.0.0:8081"
 snapshot = "/var/lib/ttxd/pages.json"
 service_name = "FRIKANALEN"
 # Packet 8/30: first page decoders show, and the network identification code (0 = none).
