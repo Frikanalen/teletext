@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from . import schedule
-from .index import Entry, IndexConfig, directory, render
+from .index import Entry, IndexConfig, directory, enhancements, logo, render
 from .markup import COLS, preview
 from .ttxd import Ttxd, TtxdError
 
@@ -56,39 +56,79 @@ def load_config(path: str) -> Config:
     return cfg
 
 
+def _rows(subpage) -> list[str]:
+    return subpage["rows"] if isinstance(subpage, dict) else subpage
+
+
+def _extras(subpage) -> dict:
+    return {k: v for k, v in subpage.items() if k != "rows"} if isinstance(subpage, dict) else {}
+
+
 class Pusher:
     """Sends one page to ttxd: the whole page with flash when it is new or much
-    changed, only the changed rows as a flash when a few rows change, and the
-    whole page again every ``refresh_secs`` so its TTL never runs out."""
+    changed, only the changed rows as a flash when a few rows of a one-subpage page
+    change, and the whole page again every ``refresh_secs`` so its TTL never runs out.
+
+    A subpage is a list of markup rows, or a dict with ``rows`` plus Level 2.5 data
+    (``x26``, ``packets``, ``raw_rows``); a change to the Level 2.5 data always resends
+    the whole page."""
 
     def __init__(
-        self, ttxd: Ttxd, page: str, ttl_secs: int, refresh_secs: int, clock=time.monotonic
+        self,
+        ttxd: Ttxd,
+        page: str,
+        ttl_secs: int,
+        refresh_secs: int,
+        clock=time.monotonic,
+        *,
+        flags: dict | None = None,
+        cycle_secs: int = 10,
+        flash: bool = True,
     ):
         self.ttxd = ttxd
         self.page = page
         self.ttl_secs = ttl_secs
         self.refresh_secs = refresh_secs
         self.clock = clock
-        self.sent: list[str] | None = None
+        self.flags = flags
+        self.cycle_secs = cycle_secs
+        self.flash = flash
+        self.sent: list | None = None
         self.sent_at = 0.0
 
-    def push(self, rows: list[str]) -> None:
-        changed = {}
-        if self.sent is not None:
-            changed = {
-                n: r for n, r in enumerate(rows, 1) if n > len(self.sent) or self.sent[n - 1] != r
-            }
+    def push(self, page: list) -> None:
+        """``page`` is a single subpage (rows or dict) or, as a tuple, several."""
+        subpages = list(page) if isinstance(page, tuple) else [page]
+        rows_only = (
+            self.sent is not None
+            and len(subpages) == len(self.sent) == 1
+            and _extras(subpages[0]) == _extras(self.sent[0])
+        )
+        if rows_only:
+            old, new = _rows(self.sent[0]), _rows(subpages[0])
+            changed = {i: r for i, r in enumerate(new, 1) if i > len(old) or old[i - 1] != r}
+            whole = len(changed) > MAX_FLASH_ROWS
+        else:
+            changed = {}
+            whole = self.sent != subpages
         stale = self.clock() - self.sent_at >= self.refresh_secs
         try:
-            if self.sent is None or stale or len(changed) > MAX_FLASH_ROWS:
-                flash = self.sent is None or bool(changed)
-                self.ttxd.put_page(self.page, [rows], ttl_secs=self.ttl_secs, flash=flash)
+            if whole or stale:
+                flash = self.flash and (whole or bool(changed))
+                self.ttxd.put_page(
+                    self.page,
+                    subpages,
+                    ttl_secs=self.ttl_secs,
+                    cycle_secs=self.cycle_secs,
+                    flash=flash,
+                    flags=self.flags,
+                )
                 self.sent_at = self.clock()
                 log.info("page %s sent%s", self.page, " with flash" if flash else "")
             elif changed:
                 self.ttxd.flash_rows(self.page, changed)
                 log.info("page %s rows %s flashed", self.page, sorted(changed))
-            self.sent = rows
+            self.sent = subpages
         except TtxdError as e:
             # Start over with a whole page next time; ttxd may have lost it.
             self.sent = None
@@ -118,6 +158,13 @@ class IndexGenerator:
         current, upcoming = schedule.now_and_next(self.items, at)
         entries = directory(self.cfg.index, self.live_pages)
         return render(self.cfg.index, current, upcoming, entries)
+
+    def page(self, at: datetime):
+        """The index subpage as sent to ttxd: rows, plus Level 2.5 data if enabled."""
+        rows = self.rows(at)
+        if not self.cfg.index.level25:
+            return rows
+        return {"rows": rows, **enhancements(self.cfg.index)}
 
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)
@@ -154,6 +201,15 @@ def main(argv: list[str] | None = None) -> int:
         log.error("no ttxd token: set TTXD_TOKEN or token in %s", args.config)
         return 2
     pusher = Pusher(ttxd, cfg.index.page, cfg.ttl_secs, cfg.refresh_secs)
+    # The logo's DRCS page: hidden (inhibit display), one subpage per 48 tiles.
+    drcs = Pusher(
+        ttxd,
+        cfg.index.drcs_page,
+        cfg.ttl_secs,
+        cfg.refresh_secs,
+        flags={"inhibit_display": True},
+        cycle_secs=1,
+    )
     started = time.monotonic()
     while True:
         gen.refresh()
@@ -162,7 +218,9 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(FIRST_SCHEDULE_RETRY)
             continue
         now = datetime.now(schedule.OSLO)
-        pusher.push(gen.rows(now))
+        if cfg.index.level25:
+            drcs.push(tuple(logo().drcs_subpages()))
+        pusher.push(gen.page(now))
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
         time.sleep(max(delay, 0.1))
 

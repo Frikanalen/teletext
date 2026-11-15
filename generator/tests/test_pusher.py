@@ -9,7 +9,7 @@ class FakeTtxd:
         self.calls = []
         self.fail = False
 
-    def put_page(self, page, subpages, *, ttl_secs, cycle_secs=10, flash=False):
+    def put_page(self, page, subpages, *, ttl_secs, cycle_secs=10, flash=False, flags=None):
         if self.fail:
             raise TtxdError("down")
         self.calls.append(("put", page, flash, ttl_secs))
@@ -49,6 +49,23 @@ class PusherTest(unittest.TestCase):
         self.t = 130
         self.p.push(["a"])
         self.assertEqual(self.ttxd.calls[1], ("put", "100", False, 600))
+
+    def test_level25_change_resends_the_page(self):
+        self.p.push({"rows": ["a"], "x26": [(41, 4, 0)]})
+        self.t = 10
+        self.p.push({"rows": ["b"], "x26": [(41, 4, 0)]})
+        self.assertEqual(self.ttxd.calls[1], ("flash", "100", [1]))
+        self.t = 20
+        self.p.push({"rows": ["b"], "x26": [(42, 4, 0)]})
+        self.assertEqual(self.ttxd.calls[2], ("put", "100", True, 600))
+
+    def test_several_subpages(self):
+        self.p.push((["a"], ["b"]))
+        self.t = 10
+        self.p.push((["a"], ["b"]))
+        self.t = 20
+        self.p.push((["a"], ["c"]))
+        self.assertEqual([c[0] for c in self.ttxd.calls], ["put", "put"])
 
     def test_error_resends_whole_page(self):
         self.p.push(["a", "b"])

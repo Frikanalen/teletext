@@ -41,22 +41,24 @@ class Ttxd:
     def put_page(
         self,
         page: str,
-        subpages: list[list[str]],
+        subpages: list,
         *,
         ttl_secs: int,
         cycle_secs: int = 10,
         flash: bool = False,
+        flags: dict | None = None,
     ) -> None:
-        self._call(
-            "PUT",
-            f"/v1/pages/{page}",
-            {
-                "subpages": subpages,
-                "cycle_secs": cycle_secs,
-                "ttl_secs": ttl_secs,
-                "flash": flash,
-            },
-        )
+        """Each subpage is a list of markup rows, or a dict with ``rows`` and any of
+        ``raw_rows``, ``x26`` and ``packets`` (Level 2.5 data, see docs/api.md)."""
+        body = {
+            "subpages": subpages,
+            "cycle_secs": cycle_secs,
+            "ttl_secs": ttl_secs,
+            "flash": flash,
+        }
+        if flags:
+            body["flags"] = flags
+        self._call("PUT", f"/v1/pages/{page}", body)
 
     def flash_rows(self, page: str, rows: dict[int, str], subpage: int = 0) -> None:
         body = {"rows": {str(n): text for n, text in rows.items()}, "subpage": subpage}

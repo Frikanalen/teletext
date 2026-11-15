@@ -2,22 +2,46 @@
 
 Layout (row numbers are display rows; ttxd sends the header row itself)::
 
-     1-2  FRIKANALEN banner, double height, on blue
-     3    tagline, on blue
-     5-8  NÅ: start time and title (up to two lines), organisation
+     1-4  banner on blue: F R I K A N A L E N and TEKST-TV on row 2, tagline on row 4
+     6-9  NÅ: start time and title (up to two lines), organisation
           (DIREKTE flashes when live)
-    10-13 DERETTER: the same for the next programme
-    15    SIDER
-    16-22 directory, up to 7 entries: "Sendeplan ........200"
+    11-14 DERETTER: the same for the next programme
+    16    SIDER
+    17-22 directory, up to 6 entries: "Sendeplan ........200"
     24    footer band
+
+On a Level 2.5 decoder (see level25.py) the page gets Frikanalen's colours and the
+logo, drawn in DRCS pixels, replaces the FRIKANALEN text on rows 1-3. The banner has
+no double height: a Level 1 double-height row hides the row below it on every
+decoder, and the logo needs rows 1-3 visible.
 """
 
+import functools
+import os
 from dataclasses import dataclass, field
 
+from . import level25
 from .markup import COLS, check, fit, leader, plain, spread, wrap
 from .schedule import OSLO, Programme
 
-DIRECTORY_ROWS = 7
+DIRECTORY_ROWS = 6
+LOGO = os.path.join(os.path.dirname(__file__), "assets", "logo.ppm")
+LOGO_ROW, LOGO_COL = 1, 2
+TITLE = "F R I K A N A L E N"  # the Level 1 stand-in for the logo
+# Colour table 3: the logo's gradient steps, beyond the brand colours in table 2.
+LOGO_COLOURS = [
+    level25.hex_rgb(c)
+    for c in (
+        "#ce4948",
+        "#b23f4a",
+        "#8e324c",
+        "#e78640",
+        "#fec40f",
+        "#449a4f",
+        "#2c7f4d",
+        "#0e5f4c",
+    )
+]
 TITLE_WIDTH = COLS - 7  # attribute, HH:MM, attribute
 
 
@@ -35,6 +59,32 @@ class IndexConfig:
     tagline: str = "Frivillige organisasjoners TV-kanal"
     footer: str = "frikanalen.tv"
     entries: list[Entry] = field(default_factory=list)
+    # Level 2.5 colours and logo. The logo's pixels go on a hidden DRCS page; its
+    # number needs tens digit 0 and a hex units digit so nobody can key it in.
+    level25: bool = True
+    drcs_page: str = "10F"
+
+
+@functools.cache
+def logo() -> level25.Graphic:
+    pic = level25.read_ppm(LOGO, level25.BRAND[0])
+    return level25.make_graphic(
+        pic, LOGO_ROW, LOGO_COL, level25.BRAND + LOGO_COLOURS, level25.BRAND[0]
+    )
+
+
+def enhancements(cfg: IndexConfig) -> dict:
+    """Level 2.5 data for page 100: palette, link to the DRCS page, and the logo."""
+    # Hide the Level 1 title wherever the logo has no pixels.
+    title = range(LOGO_COL, LOGO_COL + 2 + len(TITLE))
+    x26 = logo().x26(blank={(r, c) for r in range(LOGO_ROW, LOGO_ROW + 3) for c in title})
+    return {
+        "x26": x26,
+        "packets": [
+            {"packet": 27, "designation": 4, "triplets": level25.x27_drcs_link(cfg.drcs_page)},
+            {"packet": 28, "designation": 0, "triplets": level25.x28_palette(LOGO_COLOURS)},
+        ],
+    }
 
 
 def _band(markup: str = "") -> str:
@@ -75,7 +125,8 @@ def render(
     entries: list[Entry],
 ) -> list[str]:
     rows = [
-        spread(_band("{double}{yellow}FRIKANALEN"), "{white}TEKST-TV "),
+        _band(),
+        spread(_band("{yellow}" + TITLE), "{white}TEKST-TV "),
         _band(),
         _band("{white}" + fit(plain(cfg.tagline), COLS - 3)),
         "",
