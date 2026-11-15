@@ -39,21 +39,21 @@ BUTTONS = 4
 ASSETS = os.path.join(os.path.dirname(__file__), "assets")
 # The logo mark, 12x15 sixels, in three bands of colour like the real one.
 MARK = [
-    ".........###",
-    "......######",
-    "..#########.",
-    "##########..",
-    "....####....",
-    "............",
-    ".###########",
-    "...#######..",
+    "..........##",
+    ".......####.",
+    "....######..",
+    ".#########..",
+    "...######...",
     ".....###....",
-    "..#####.....",
+    ".#########..",
+    "...#########",
+    "......###...",
+    "..####......",
     "...####.....",
     "...####.....",
     "....###.....",
-    "....##......",
-    ".....#......",
+    ".....##.....",
+    "......#.....",
 ]
 MARK_BANDS = [(0, 6, RED), (6, 9, YELLOW), (9, 15, GREEN)]
 MARK_X, MARK_Y = 4, 21  # sixels: columns 2-7, rows 8-12
@@ -65,6 +65,9 @@ TITLE_WIDTH = COLS - TITLE_COL
 # Level 2.5: the real logo over the block one. Mark on rows 8-12 from column 2,
 # wordmark on rows 9-11 from column 9, 3 pixels below the top of its first row.
 LOGO_ROW, LOGO_COL, WORD_COL, WORD_TOP = 8, 2, 9, 3
+# Where the mark goes in that, in pixels. A cell has one colour, and from here the
+# blades fall in cells of their own but for a few pixels.
+MARK_AT = (3, 5)
 LOGO_ROWS = range(7, 12)  # 0-based rows the logo touches
 # Colour table 2 on a Level 2.5 decoder, in the order of the Level 1 colours it
 # stands in for: black, red, green, yellow, blue, magenta, cyan, white.
@@ -239,9 +242,8 @@ def _read(name: str) -> level25.Picture:
 def logo() -> level25.Graphic:
     """The real logo for Level 2.5: the mark, and the wordmark beside it."""
     mark, word = _read("mark.ppm"), _read("wordmark.ppm")
-    left = (6 * level25.TILE_W - mark.width) // 2
-    pic = level25.Picture.blank((WORD_COL - LOGO_COL) * level25.TILE_W + word.width, mark.height)
-    pic.paste(mark, left, 0)
+    pic = level25.Picture.blank((WORD_COL - LOGO_COL) * level25.TILE_W + word.width, 50)
+    pic.paste(mark, *MARK_AT)
     pic.paste(word, (WORD_COL - LOGO_COL) * level25.TILE_W, level25.TILE_H + WORD_TOP)
     return level25.make_graphic(pic, LOGO_ROW, LOGO_COL, PALETTE, level25.BRAND[0])
 
@@ -292,10 +294,14 @@ def enhancements(cfg: IndexConfig, rows: list[str], at: sky.Look) -> dict:
     row_colours = {}
     for row in range(1, sky.ROWS + 1):
         colour = SKY_COLOUR + row - 1
-        row_colours[row] = colour
-        backgrounds[row] = [(0, 0x03, colour)]
+        # The logo's mark stands on the page's own background, also where it reaches
+        # into the last row of sky: that row's sky starts beside the mark.
+        start = WORD_COL - 1 if row == LOGO_ROW else 0
+        if not start:
+            row_colours[row] = colour
+        backgrounds[row] = [(start, 0x03, colour)]
         for col, token in enumerate(_tokens(rows[row - 1])):
-            if token == "{blackbg}":
+            if token == "{blackbg}" and col > start:
                 backgrounds[row].append((col, 0x03, colour))
     keys = _key_colours(rows)
     blank = _block_logo_cells()

@@ -2,7 +2,7 @@
 
     python3 tools/logo_assets.py ../on-air-graphics/src/core/components/Logo.tsx
 
-Writes generator/teletext_pages/assets/wordmark.ppm (355x27) and mark.ppm (62x50) in
+Writes generator/teletext_pages/assets/wordmark.ppm (355x27) and mark.ppm (56x45) in
 teletext pixels, which are about 0.69 times as wide as they are tall. Each pixel is on
 when the shape covers at least half of it, which gives diagonals the most regular
 steps one bit per pixel allows. Needs Pillow; the generator itself does not.
@@ -90,7 +90,9 @@ def main() -> None:
     word.paste(PAPER, mask=cover(letters, 55.19, 15.78, size[0] / 184.66, size[1] / 20.23, size))
     word.save(os.path.join(ASSETS, "wordmark.ppm"))
 
-    size = (62, 50)  # the mark is 45 units wide and 52 tall
+    # The mark is 45 units wide and 52 tall. At this size, and where index.logo() puts
+    # it, no blade shares a cell with more than a sliver of another (a cell has one colour).
+    size = (56, 45)
     mark = Image.new("RGB", size, INK)
     for d, colour in zip(blades, BLADES):
         mark.paste(colour, mask=cover([d], 0, 0, size[0] / 45, size[1] / 52, size))

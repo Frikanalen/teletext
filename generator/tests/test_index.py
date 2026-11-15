@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime
 
-from teletext_pages import sky
+from teletext_pages import index, sky
 from teletext_pages.index import Entry, IndexConfig, directory, fastext, render
 from teletext_pages.markup import ROWS, cells, preview
 from teletext_pages.schedule import next_change, now_and_next, parse
@@ -146,3 +146,18 @@ class FastextTest(unittest.TestCase):
             pages.append(f"{(1 ^ m) or 8}{b1:02X}")
         self.assertEqual(pages, ["200", "888", "8FF", "8FF", "8FF", "100"])
         self.assertEqual(n[36] >> 3, 1)  # show row 24
+
+
+class LogoTest(unittest.TestCase):
+    def test_mark_keeps_its_blades(self):
+        # A cell shows one colour, so where two blades meet in a cell one loses its
+        # pixels there. The mark is placed so that this is a handful of them.
+        graphic, mark = index.logo(), index._read("mark.ppm")
+        drawn = sum(c is not None for row in mark.pixels for c in row)
+        shown = sum(
+            (byte & 0x3F).bit_count()
+            for (_, col), (tile, _) in graphic.cells.items()
+            if col < index.WORD_COL
+            for byte in graphic.tiles[tile]
+        )
+        self.assertGreater(shown, drawn * 0.97)

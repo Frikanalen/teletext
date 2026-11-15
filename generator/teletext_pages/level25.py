@@ -321,7 +321,7 @@ def make_graphic(
                     c = pic.pixels[py][px] if py < pic.height and px < pic.width else None
                     if c:
                         pixels[(x, y)] = nearest(c, palette)
-                        w = sum(abs(a - b) for a, b in zip(c, background)) ** 2
+                        w = sum(abs(a - b) for a, b in zip(c, background))
                         weights[pixels[(x, y)]] = weights.get(pixels[(x, y)], 0) + w
             if not weights:
                 continue
