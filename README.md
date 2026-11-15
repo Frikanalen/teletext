@@ -17,3 +17,12 @@ curl -XPUT localhost:8080/v1/pages/200 -H 'authorization: Bearer change-me' \
 
 The studio pages (the index on 100 for now) are rendered by a small Python generator
 in [generator/](generator/README.md), which pushes them to ttxd through this API.
+
+## Releases
+
+Tag `vX.Y.Z` on main (matching `version` in `Cargo.toml`) and GitHub Actions builds
+`ttxd` with DeckLink output on Ubuntu 24.04 and attaches `ttxd-x86_64-linux-gnu` and its
+`.sha256` to the release. infra's `roles/ttxd` installs that asset.
+
+The DeckLink SDK's Linux headers are vendored in `vendor/decklink-sdk/include` under the
+licence at the top of each file; see `vendor/decklink-sdk/NOTICE`.

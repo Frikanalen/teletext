@@ -14,6 +14,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # Uses the vendored SDK headers; libDeckLinkAPI.so is loaded at run time.
+      - run: cargo clippy --all-targets --features decklink -- -D warnings
   generator:
     runs-on: ubuntu-latest
     defaults:
