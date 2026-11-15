@@ -63,7 +63,7 @@ impl StoredPage {
     }
 
     /// Header bits for a transmission of this page, on top of `base`.
-    fn header_flags(&self, base: Flags) -> Flags {
+    pub(crate) fn header_flags(&self, base: Flags) -> Flags {
         Flags {
             inhibit: base.inhibit || self.flags.inhibit_display,
             suppress_header: base.suppress_header || self.flags.suppress_header,
@@ -75,7 +75,7 @@ impl StoredPage {
         self.expires.is_some_and(|e| now >= e)
     }
 
-    fn subcode(&self, idx: usize) -> u16 {
+    pub(crate) fn subcode(&self, idx: usize) -> u16 {
         if self.subpages.len() > 1 {
             idx as u16 + 1
         } else {
@@ -156,6 +156,40 @@ pub struct Stats {
     pub carousel_packets: u64,
     pub filler_packets: u64,
     pub service_data_packets: u64,
+}
+
+/// Header bits of a subtitle transmission.
+pub const SUBTITLE_FLAGS: Flags = Flags {
+    erase: true,
+    newsflash: false,
+    subtitle: true,
+    suppress_header: true,
+    update: false,
+    interrupted: false,
+    inhibit: false,
+};
+
+/// The page content for up to 3 subtitle lines: boxed, double height, centred, on
+/// the bottom rows.
+pub fn subtitle_content(lines: &[String]) -> Result<Content, String> {
+    if lines.len() > 3 {
+        return Err("at most 3 subtitle lines".into());
+    }
+    let mut content = Content::default();
+    let first_row = 23 - 2 * lines.len() as u8;
+    for (i, text) in lines.iter().enumerate() {
+        let (cells, _) = parse_cells(text)?;
+        let width = cells.len() + 5; // double height, 2x start box, 2x end box
+        if width > COLS {
+            return Err(format!("subtitle line too long: {text:?}"));
+        }
+        let pad = " ".repeat((COLS - width) / 2);
+        content.set_row(
+            first_row + 2 * i as u8,
+            &format!("{pad}{{double}}{{box}}{{box}}{text}{{endbox}}{{endbox}}"),
+        )?;
+    }
+    Ok(content)
 }
 
 pub struct Service {
@@ -286,30 +320,8 @@ impl Service {
 
     /// Show subtitle lines (bottom-aligned, double height, boxed). An empty list clears.
     pub fn subtitle(&mut self, no: PageNo, lines: &[String]) -> Result<(), String> {
-        if lines.len() > 3 {
-            return Err("at most 3 subtitle lines".into());
-        }
-        let mut content = Content::default();
-        let first_row = 23 - 2 * lines.len() as u8;
-        for (i, text) in lines.iter().enumerate() {
-            let (cells, _) = parse_cells(text)?;
-            let width = cells.len() + 5; // double height, 2x start box, 2x end box
-            if width > COLS {
-                return Err(format!("subtitle line too long: {text:?}"));
-            }
-            let pad = " ".repeat((COLS - width) / 2);
-            content.set_row(
-                first_row + 2 * i as u8,
-                &format!("{pad}{{double}}{{box}}{{box}}{text}{{endbox}}{{endbox}}"),
-            )?;
-        }
-        let flags = Flags {
-            erase: true,
-            subtitle: true,
-            suppress_header: true,
-            ..Default::default()
-        };
-        let unit = Unit::new(Tier::Subtitle, no, 0, flags, &content, true, None);
+        let content = subtitle_content(lines)?;
+        let unit = Unit::new(Tier::Subtitle, no, 0, SUBTITLE_FLAGS, &content, true, None);
         // Only the newest cue matters.
         self.subtitles.clear();
         self.subtitles.push_back(unit);
@@ -360,7 +372,7 @@ impl Service {
         None
     }
 
-    fn header_text(&self, now: DateTime<Local>) -> [u8; 32] {
+    pub(crate) fn header_text(&self, now: DateTime<Local>) -> [u8; 32] {
         let clock = now.format("%d.%m %H:%M:%S").to_string();
         let mut t = [b' '; 32];
         for (d, c) in t

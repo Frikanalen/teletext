@@ -8,6 +8,7 @@ mod charset;
 mod config;
 #[cfg(feature = "decklink")]
 mod decklink;
+mod feed;
 mod ham;
 mod op47;
 mod p830;
@@ -147,9 +148,22 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    let feed = feed::Feed::new(cfg.public_max_clients);
+    if let Some(addr) = &cfg.public_listen {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        tracing::info!("public feed on {addr}");
+        let app = feed::router(svc.clone(), feed.clone());
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app).await {
+                tracing::error!("public feed: {e}");
+            }
+        });
+    }
+
     let state = api::AppState {
         svc,
         publishers: Arc::new(cfg.publishers),
+        feed,
     };
     let listener = tokio::net::TcpListener::bind(&cfg.listen).await?;
     tracing::info!("API on {}", cfg.listen);
