@@ -1,8 +1,11 @@
 import os
 import unittest
+from datetime import datetime
 
 from teletext_pages import level25 as L
-from teletext_pages.index import IndexConfig, enhancements, logo
+from teletext_pages import sky
+from teletext_pages.index import MAX_TRIPLETS, Entry, IndexConfig, logo, page
+from teletext_pages.schedule import OSLO
 
 
 def unpack(triplets, fields):
@@ -90,25 +93,51 @@ class GraphicTest(unittest.TestCase):
         self.assertEqual((pic.width, pic.height), (355, 27))
 
 
+WET = [(False, False), (True, False), (False, True)]
+
+
 class IndexLogoTest(unittest.TestCase):
     def test_logo_fits_drcs_and_x26(self):
         g = logo()
         self.assertLessEqual(len(g.tiles), 3 * L.TILES_PER_DRCS_SUBPAGE)
         self.assertEqual(len(g.drcs_subpages()), -(-len(g.tiles) // L.TILES_PER_DRCS_SUBPAGE))
         # Each row draws from one DRCS subpage, named by its subcode (1, 2, ...).
-        for row in range(1, 6):
+        for row in range(8, 13):
             subs = {t // L.TILES_PER_DRCS_SUBPAGE for (r, _), (t, _) in g.cells.items() if r == row}
             self.assertEqual(len(subs), 1, row)
         modes = [d for a, m, d in g.x26() if m == 0x18]
         self.assertTrue(modes)
         self.assertTrue(all(0x41 <= d <= 0x43 for d in modes))
-        e = enhancements(IndexConfig())
-        # The colour key buttons (rows 23-24) use the standard colours from table 0.
-        x26 = e["x26"]
-        row23 = x26.index((63, 0x04, 0))
+
+    def test_every_sky_fits_x26(self):
+        cfg = IndexConfig(entries=[Entry(str(n), "Side") for n in (200, 300, 400, 888)])
+        skies = [sky.Weather(c, rain=r, snow=s, thunder=r) for c in (0, 2, 3) for r, s in WET]
+        skies.append(sky.Weather(1, fog=True))
+        for hour in (3, 9, 15):
+            for weather in skies:
+                at = sky.look(datetime(2026, 11, 15, hour, 20, tzinfo=OSLO), weather)
+                p = page(cfg, None, None, cfg.entries, at)
+                # Room left for ttxd's Æ/Ø substitutions (16 packets of 13, less a
+                # terminator).
+                self.assertLessEqual(len(p["x26"]), MAX_TRIPLETS, (hour, weather))
+                self.assertEqual([k["packet"] for k in p["packets"]], [27, 27, 28])
+                # Rows and columns in rising order, as a decoder reads them.
+                position = (0, -1)
+                for address, _, _ in p["x26"]:
+                    if address >= 40:
+                        position = (24 if address == 40 else address - 40, -1)
+                    else:
+                        self.assertGreaterEqual(address, position[1])
+                        position = (position[0], address)
+
+    def test_sky_and_keys(self):
+        cfg = IndexConfig(entries=[Entry("200", "Sendeplan")])
+        at = sky.look(datetime(2026, 11, 15, 15, 35, tzinfo=OSLO))
+        x26 = page(cfg, None, None, cfg.entries, at)["x26"]
+        # Each sky row: its colour as the row colour and as the background.
         self.assertEqual(
-            x26[row23 + 1 : row23 + 5], [(1, 0, 1), (11, 0, 2), (21, 0, 3), (31, 0, 6)]
+            x26[:6], [(41, 1, 24), (41, 4, 0), (0, 3, 24), (42, 1, 25), (42, 4, 0), (0, 3, 25)]
         )
-        # Room left for ttxd's Æ/Ø substitutions (16 packets of 13, less a terminator).
-        self.assertLess(len(e["x26"]), 160)
-        self.assertEqual([p["packet"] for p in e["packets"]], [27, 28])
+        # The red key keeps the standard red from colour table 0.
+        row23 = x26.index((63, 0x04, 0))
+        self.assertEqual(x26[row23 + 1 : row23 + 3], [(1, 0x00, 1), (2, 0x03, 1)])

@@ -11,12 +11,13 @@ import logging
 import os
 import sys
 import time
-import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from . import schedule
-from .index import Entry, IndexConfig, directory, enhancements, fastext, logo, render
+import tomllib
+
+from . import index, schedule, sky, weather
+from .index import Entry, IndexConfig, directory, logo
 from .markup import COLS, preview
 from .ttxd import Ttxd, TtxdError
 
@@ -147,6 +148,10 @@ class IndexGenerator:
         self.items: list[schedule.Programme] = []
         self.have_schedule = False
         self.live_pages: set[str] | None = None
+        self.forecast = (
+            weather.Forecast(cfg.index.latitude, cfg.index.longitude) if cfg.index.weather else None
+        )
+        self.weather = sky.Weather()
 
     def refresh(self) -> None:
         try:
@@ -154,26 +159,30 @@ class IndexGenerator:
             self.have_schedule = True
         except (OSError, ValueError, KeyError, TypeError) as e:  # keep the last schedule
             log.warning("schedule: %s", e)
+        if self.forecast:
+            try:
+                self.weather = self.forecast.now()
+            except (OSError, ValueError) as e:  # keep the last weather
+                self.weather = self.forecast.weather
+                log.warning("weather: %s", e)
         try:
             self.live_pages = self.ttxd.live_pages()
         except TtxdError as e:
             log.warning("page list: %s", e)
 
+    def look(self, at: datetime) -> sky.Look:
+        return sky.look(at, self.weather, self.cfg.index.latitude, self.cfg.index.longitude)
+
     def rows(self, at: datetime) -> list[str]:
         current, upcoming = schedule.now_and_next(self.items, at)
         entries = directory(self.cfg.index, self.live_pages)
-        return render(self.cfg.index, current, upcoming, entries)
+        return index.render(self.cfg.index, current, upcoming, entries, self.look(at))
 
     def page(self, at: datetime) -> dict:
-        """The index subpage as sent to ttxd: rows, the fastext links, and Level 2.5
-        data if enabled."""
-        links = fastext(self.cfg.index, directory(self.cfg.index, self.live_pages))
-        page = {"rows": self.rows(at), "packets": [links]}
-        if self.cfg.index.level25:
-            extra = enhancements(self.cfg.index)
-            page["x26"] = extra["x26"]
-            page["packets"] += extra["packets"]
-        return page
+        """The index subpage as sent to ttxd."""
+        current, upcoming = schedule.now_and_next(self.items, at)
+        entries = directory(self.cfg.index, self.live_pages)
+        return index.page(self.cfg.index, current, upcoming, entries, self.look(at))
 
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)

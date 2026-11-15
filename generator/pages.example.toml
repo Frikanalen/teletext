@@ -8,10 +8,14 @@ ttl_secs = 600
 
 [index]
 page = "100"
-tagline = "Frivillige organisasjoners TV-kanal"
+tagline = "Sivilsamfunnets kanal"
 footer = "frikanalen.tv"
+# The sky follows the sun here, with the weather from MET Norway (api.met.no).
+latitude = 59.91
+longitude = 10.75
+weather = true
 
-# Listed on the index when ttxd is sending the page, or always with always = true.
+# The first four that ttxd is sending (or that have always = true) get a colour key.
 [[index.entry]]
 page = "200"
 title = "Sendeplan"

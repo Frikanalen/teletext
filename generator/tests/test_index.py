@@ -1,6 +1,7 @@
 import unittest
 from datetime import datetime
 
+from teletext_pages import sky
 from teletext_pages.index import Entry, IndexConfig, directory, fastext, render
 from teletext_pages.markup import ROWS, cells, preview
 from teletext_pages.schedule import next_change, now_and_next, parse
@@ -65,6 +66,9 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(next_change(ITEMS, at), T("2026-11-15T20:00:00+01:00"))
 
 
+DUSK = sky.look(T("2026-11-15T15:35:00+01:00"))
+
+
 class IndexTest(unittest.TestCase):
     def test_directory_lists_live_and_always(self):
         shown = [e.page for e in directory(CFG, {"100", "200"})]
@@ -73,32 +77,40 @@ class IndexTest(unittest.TestCase):
 
     def test_render(self):
         at = T("2026-11-15T18:30:00+01:00")
-        rows = render(CFG, *now_and_next(ITEMS, at), directory(CFG, {"200"}))
+        rows = render(CFG, *now_and_next(ITEMS, at), directory(CFG, {"200"}), DUSK)
         self.assertEqual(len(rows), ROWS)
         self.assertTrue(all(cells(r) <= 40 for r in rows))
         text = [preview(r).rstrip() for r in rows]
-        self.assertEqual(text[0], "          frikanalen.tv        TEKST-TV")
-        self.assertTrue(text[4].endswith("Sivilsamfunnets kanal"))
-        self.assertIn("{gwhite}", rows[2])
-        self.assertTrue(text[7].startswith("   NÅ PÅ FRIKANALEN"))
-        self.assertTrue(rows[7].endswith("{flash}DIREKTE "))
-        self.assertEqual(text[8], " 18:00 Debatt: Hva skjer med kanalen? En")
-        self.assertEqual(text[9], "       svært lang tittel som må kuttes")
+        self.assertTrue(text[0].startswith(" frikanalen.tv"))
+        self.assertTrue(text[0].endswith(" TEKST-TV"))
+        self.assertIn("{gyellow}", rows[1])  # the sun
+        self.assertIn("{gcyan}", rows[7])  # the horizon
+        self.assertIn("{gwhite}", rows[9])  # the lettering
+        self.assertEqual(text[11].strip(), "Sivilsamfunnets kanal")
+        self.assertEqual(text[12][:19], "   NÅ PÅ FRIKANALEN")
+        self.assertRegex(rows[12], r"\{flash\}.*DIREKTE")
+        self.assertEqual(text[13], " 18:00  Debatt: Hva skjer med kanalen?")
+        self.assertEqual(text[14], "        En svært lang tittel som må.")
         # Outside text cannot inject markup.
-        self.assertEqual(text[10], "       Frikanalen (red)")
-        self.assertEqual(text[13], " 19:04 Været")
-        self.assertEqual(text[14], "")
-        self.assertTrue(text[17].startswith("   SIDER"))
-        self.assertEqual(text[18], " Sendeplan " + "." * 25 + " 200")
-        self.assertEqual(text[19], " Teksting " + "." * 26 + " 888")
-        self.assertEqual(rows[5].count("{g"), 3)  # three bars
-        self.assertEqual(rows[22].count("{g"), 4)  # four buttons
+        self.assertEqual(text[15], "        Frikanalen (red)")
+        self.assertEqual(text[17][:11], "   DERETTER")
+        self.assertEqual(text[18], " 19:04  Været")
+        self.assertEqual(text[19], "")
+        self.assertIn("200", text[22])
+        self.assertIn("888", text[22])
         self.assertEqual(rows[23], "{red}Sendeplan{green}Teksting")
 
     def test_render_empty_schedule(self):
-        rows = render(CFG, None, None, [])
-        self.assertEqual(preview(rows[8]).strip(), "Ingen program i sendeplanen")
+        rows = render(CFG, None, None, [], DUSK)
+        self.assertEqual(preview(rows[13]).strip(), "Ingen program i sendeplanen")
         self.assertEqual(len(rows), ROWS)
+        self.assertEqual(rows[22:], ["", ""])
+
+    def test_logo_rows_keep_a_black_background(self):
+        # A Level 2.5 decoder draws the real logo over them.
+        rows = render(CFG, None, None, [], DUSK)
+        for row in rows[7:12]:
+            self.assertNotIn("{newbg}", row)
 
 
 class FastextTest(unittest.TestCase):

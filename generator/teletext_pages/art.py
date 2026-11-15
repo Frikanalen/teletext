@@ -12,6 +12,7 @@ A picture is 80 sixels wide and 3 sixels tall per row. A sixel is 1.25 times as 
 as it is tall on a 4:3 screen.
 """
 
+import functools
 from dataclasses import dataclass, field
 
 from .markup import COLS
@@ -91,13 +92,21 @@ def _shown(want: tuple, state: tuple, bg: int, hold: bool) -> int:
 
 
 def encode_row(pic: Picture, row: int) -> str:
-    """Markup for one row: a beam search over the decoder's state, cell by cell.
+    """Markup for one row of ``pic``."""
+    try:
+        return _encode(tuple(_wanted(pic, row)), row in pic.plain_rows)
+    except ValueError as e:
+        raise ValueError(f"row {row}: {e}") from None
+
+
+@functools.lru_cache(maxsize=256)
+def _encode(wanted: tuple, plain: bool) -> str:
+    """A beam search over the decoder's state, cell by cell. Rows are remembered, so a
+    page that is drawn again only pays for the rows that changed.
 
     The state is (graphics mode, foreground, background, hold, held mosaic, flash).
     The held mosaic is None when decoders disagree about it (after a change between
     text and graphics), and hold is not used then."""
-    wanted = _wanted(pic, row)
-    plain = row in pic.plain_rows
     start = (False, WHITE, BLACK, False, 0, False)
     beam: dict[tuple, tuple[int, tuple | None]] = {start: (0, None)}
     for want in wanted:
@@ -146,7 +155,7 @@ def encode_row(pic: Picture, row: int) -> str:
         beam = dict(sorted(nxt.items(), key=lambda kv: kv[1][0])[:_BEAM])
     cost, path = min(beam.values(), key=lambda v: v[0])
     if cost >= _NEVER:
-        raise ValueError(f"row {row}: no room for the attributes its text needs")
+        raise ValueError("no room for the attributes its text needs")
     tokens = []
     while path:
         path, token = path
