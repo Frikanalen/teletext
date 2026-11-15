@@ -6,6 +6,8 @@
 mod api;
 mod charset;
 mod config;
+#[cfg(feature = "decklink")]
+mod decklink;
 mod ham;
 mod op47;
 mod page;
@@ -60,25 +62,37 @@ async fn main() -> anyhow::Result<()> {
     );
     let svc = Arc::new(Mutex::new(svc));
 
-    // Frame clock. Until the DeckLink output drives it, a 50 Hz timer stands in.
-    // Each frame's packets go to the T42 debug stream; the SDP is what the DeckLink will carry.
+    // Frame clock: the DeckLink card when configured, else a 50 Hz timer.
+    // Each frame's packets also go to the T42 debug stream.
     let (tx, _) = broadcast::channel::<Vec<page::Packet>>(250);
-    {
-        let svc = svc.clone();
-        let tx = tx.clone();
-        let lines = cfg.op47_lines;
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_millis(20));
-            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut seq: u16 = 0;
-            loop {
-                tick.tick().await;
-                let packets = svc.lock().unwrap().next_frame(SystemTime::now());
-                let _sdp = op47::sdp(&packets, &lines, seq);
-                seq = seq.wrapping_add(1);
-                let _ = tx.send(packets);
-            }
-        });
+    match &cfg.decklink_device {
+        #[cfg(feature = "decklink")]
+        Some(dev) => {
+            decklink::start(dev, cfg.vanc_line, cfg.op47_lines, svc.clone(), tx.clone())?;
+            tracing::info!("OP-47 on {dev:?}, VANC line {}", cfg.vanc_line);
+        }
+        #[cfg(not(feature = "decklink"))]
+        Some(_) => {
+            anyhow::bail!("decklink_device is set but ttxd was built without the decklink feature")
+        }
+        None => {
+            tracing::warn!("no decklink_device: using a 50 Hz timer, nothing goes to SDI");
+            let svc = svc.clone();
+            let tx = tx.clone();
+            let lines = cfg.op47_lines;
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_millis(20));
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut seq: u16 = 0;
+                loop {
+                    tick.tick().await;
+                    let packets = svc.lock().unwrap().next_frame(SystemTime::now());
+                    let _sdp = op47::sdp(&packets, &lines, seq);
+                    seq = seq.wrapping_add(1);
+                    let _ = tx.send(packets);
+                }
+            });
+        }
     }
 
     // Snapshot writer.
