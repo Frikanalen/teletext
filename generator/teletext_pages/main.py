@@ -205,6 +205,9 @@ class IndexGenerator:
         # How far the wind has blown the clouds, in sixels, and when that was reckoned.
         self.drift = 0.0
         self.drift_at: float | None = None
+        # Which way the sky is looked at, and the step of the sky that was decided in.
+        self.heading = sky.SOUTH
+        self.aimed_at: datetime | None = None
         # Shared objects ttxd holds for us, by name; None until it has taken them.
         self.shared: dict | None = None
         self.shared_at = 0.0
@@ -252,9 +255,21 @@ class IndexGenerator:
             self.drift += speed * (t - self.drift_at) / 60
         self.drift_at = t
 
+    def aim(self, at: datetime) -> None:
+        """Turn the view of the sky a step towards the best there is to see, once for
+        each step of the sky. The first time it goes straight there."""
+        index = self.cfg.index
+        step = sky.sky_time(at)
+        if not index.sky_follows or step == self.aimed_at:
+            return
+        target = sky.best_heading(at, index.latitude, index.longitude, self.heading)
+        first = self.aimed_at is None
+        self.heading = target if first else sky.turn_towards(self.heading, target)
+        self.aimed_at = step
+
     def look(self, at: datetime) -> sky.Look:
         index = self.cfg.index
-        return sky.look(at, self.weather, index.latitude, index.longitude, self.drift)
+        return sky.look(at, self.weather, index.latitude, index.longitude, self.drift, self.heading)
 
     def rows(self, at: datetime) -> list[str]:
         current, upcoming = schedule.now_and_next(self.items, at)
@@ -371,6 +386,7 @@ def main(argv: list[str] | None = None) -> int:
             continue
         now = datetime.now(schedule.OSLO)
         gen.blow()
+        gen.aim(now)
         if cfg.index.level25:
             drcs.push(tuple(logo().drcs_subpages()))
             gen.share_assets()

@@ -123,6 +123,10 @@ class IndexConfig:
     latitude: float = 59.91
     longitude: float = 10.75
     weather: bool = True
+    # Aim the view of the sky at the most there is to see. Without this it is always
+    # to the south. ``sky_label`` says which way it looks, in the middle of the top row.
+    sky_follows: bool = True
+    sky_label: bool = False
 
 
 def _stamp(pic: Picture, x: int, y: int, art: list[str], colour: int) -> None:
@@ -224,6 +228,9 @@ def _picture(
     small = sky.draw(pic, at)
     pic.text(0, 1, fit(plain(cfg.footer), 16), WHITE)
     pic.text(0, COLS - 9, "TEKST-TV", CYAN)
+    if cfg.sky_label and (at.heading != sky.SOUTH or at.elevation < sky.NIGHT_BELOW):
+        # The view is aimed: say which way it looks.
+        pic.text(0, 22 - len(at.direction) // 2, at.direction, CYAN)
     _logo(pic, cfg.tagline)
     # A Level 2.5 decoder draws the real logo over these rows, and only replaces
     # characters: the block logo must not lean on background colours.

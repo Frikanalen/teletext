@@ -93,6 +93,37 @@ class StarsTest(unittest.TestCase):
         # Below the horizon in the small hours.
         self.assertIsNone(sky.look(datetime(2026, 11, 16, 2, 0, tzinfo=OSLO)).moon_at)
 
+    def test_aiming_the_view(self):
+        lat, lon = self.LAT, self.LON
+        # By day the view is to the south; a midsummer evening sun in the north-west
+        # pulls it round just far enough to stay in the picture.
+        self.assertEqual(sky.best_heading(datetime(2026, 11, 15, 12, tzinfo=OSLO), lat, lon), 180)
+        evening = datetime(2026, 6, 21, 21, 0, tzinfo=OSLO)
+        _, azimuth = sky.sun_position(evening, lat, lon)
+        heading = sky.best_heading(evening, lat, lon)
+        self.assertGreater(heading, 180)
+        self.assertLessEqual(abs(azimuth - heading), sky.SUN_ROOM)
+        # A February evening: Orion, whole, a little east of south.
+        night = datetime(2027, 2, 10, 21, 0, tzinfo=OSLO)
+        heading = sky.best_heading(night, lat, lon)
+        self.assertTrue(150 <= heading <= 195, heading)
+        names = {b.name for b in sky.look(night, heading=heading).bodies}
+        self.assertTrue(names.issuperset(sky.FIGURES["Orion"]))
+        # It stays where it is unless another view is clearly better.
+        self.assertEqual(sky.best_heading(night, lat, lon, current=heading + 15), heading + 15)
+        self.assertTrue(150 <= sky.best_heading(night, lat, lon, current=0) <= 195)
+
+    def test_the_view_turns_a_step_at_a_time(self):
+        self.assertEqual(sky.turn_towards(180, 90), 165)
+        self.assertEqual(sky.turn_towards(345, 30), 0)  # the shorter way, through north
+        self.assertEqual(sky.turn_towards(170, 180), 180)
+        north = sky.look(datetime(2026, 11, 16, 2, 0, tzinfo=OSLO), heading=0)
+        self.assertEqual(north.direction, "NORD")
+        # The pole star is in the middle, as high as the latitude.
+        polaris = next(b for b in north.bodies if b.name == "Polaris")
+        self.assertLessEqual(abs(polaris.x - sky.MIDDLE), 1)
+        self.assertLessEqual(abs(sky.HORIZON - 1 - polaris.y - 20), 1)
+
     def test_clouds_drift(self):
         def clouds(drift):
             pic = art.Picture(sky.ROWS)

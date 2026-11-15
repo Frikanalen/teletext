@@ -1,7 +1,8 @@
 """The sky over the index page: the southern sky over Oslo right now, and the weather.
 
 The picture is a window to the south, east on the left and west on the right, from the
-horizon up to about 50 degrees. :func:`look` works out the scene from the time, the
+horizon up to 66 degrees. The view can also be aimed elsewhere: :func:`best_heading`
+picks the direction with the most to see. :func:`look` works out the scene from the time, the
 place and the weather, and :func:`draw` paints it in sixels: a sliced sun that grows
 as it nears the horizon; at night the brightest stars, the planets and the moon in
 its phase, each where it really is (:mod:`astro`); and clouds that drift with the
@@ -29,7 +30,25 @@ STEPS = 8  # gradient colours, top to horizon
 # The window: this many degrees either side of south across the picture's half
 # width, and degrees of altitude per sixel row (a sixel is 1.25 times as wide as tall).
 MIDDLE, HALF_WIDTH, AZIMUTH_SPAN = 40, 36, 100.0
-DEGREES_PER_ROW = AZIMUTH_SPAN / HALF_WIDTH / 1.25
+# Three degrees a row puts the top of the picture 66 degrees up, high enough for the
+# pole star when the view is to the north (a little flatter than the true shape).
+DEGREES_PER_ROW = 3.0
+# The view can be aimed: it turns this many degrees at a time. While the sun is up
+# (and until it is this far down) the view keeps the sun within SUN_ROOM degrees of
+# the middle; after that it looks for the best of the night sky.
+SOUTH = 180
+TURN_STEP, NIGHT_BELOW, SUN_ROOM = 15, -6.0, 60
+# What a view is worth: each body by how bright it is, the moon, and a bonus for a
+# whole figure that people know. A body counts for more near the middle. The view
+# only moves on when another is this much better.
+WORTH = {"star-0": 4.0, "star-1": 2.0, "star-2": 1.0, "planet": 4.0}
+MOON_WORTH, FIGURE_WORTH, BETTER_BY = 6.0, 8.0, 1.2
+FIGURES = {
+    "Orion": ("Betelgeuse", "Rigel", "Bellatrix", "Saiph", "Alnilam"),
+    "Karlsvogna": ("Dubhe", "Merak", "Phecda", "Alioth", "Mizar", "Alcaid"),
+    "Sommertriangelet": ("Vega", "Deneb", "Altair"),
+}
+DIRECTIONS = ["NORD", "NORDØST", "ØST", "SØRØST", "SØR", "SØRVEST", "VEST", "NORDVEST"]
 # The stars turn a sixel in about ten minutes. They are placed for the last whole
 # step of this many minutes, so the page is not sent again for every star that moves.
 SKY_STEP_MINUTES = 5
@@ -84,10 +103,11 @@ def moon_phase(at: datetime) -> float:
     return astro.moon_phase(at)
 
 
-def place(altitude: float, azimuth: float) -> tuple[int, int]:
-    """The sixel (x, y) where a point of the sky falls. It may be outside the picture."""
-    south = azimuth % 360 - 180  # degrees west of south
-    x = MIDDLE + round(south / AZIMUTH_SPAN * HALF_WIDTH)
+def place(altitude: float, azimuth: float, heading: int = SOUTH) -> tuple[int, int]:
+    """The sixel (x, y) where a point of the sky falls when the middle of the picture
+    looks towards ``heading``. It may be outside the picture."""
+    right = (azimuth - heading + 180) % 360 - 180  # degrees to the right of the middle
+    x = MIDDLE + round(right / AZIMUTH_SPAN * HALF_WIDTH)
     y = HORIZON - 1 - round(altitude / DEGREES_PER_ROW)
     return x, y
 
@@ -100,6 +120,7 @@ class Body:
     y: int
     kind: str  # "star-0" (brightest) to "star-2", or "planet"
     colour: int
+    name: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,6 +136,12 @@ class Look:
     weather: Weather = CLEAR
     bodies: tuple[Body, ...] = ()
     drift: int = 0  # how far the clouds have drifted, in sixels
+    heading: int = SOUTH  # the azimuth in the middle of the picture
+
+    @property
+    def direction(self) -> str:
+        """The compass direction the picture looks in, in Norwegian."""
+        return DIRECTIONS[round(self.heading / 45) % 8]
 
 
 # Spectral class to the nearest teletext colour: hot stars bluish, cool ones red.
@@ -129,22 +156,73 @@ def _in_window(x: int, y: int) -> bool:
     return LEFT <= x < RIGHT and 0 <= y < HORIZON
 
 
-def bodies(at: datetime, lat: float, lon: float, elevation: float) -> tuple[Body, ...]:
+def bodies(
+    at: datetime, lat: float, lon: float, elevation: float, heading: int = SOUTH
+) -> tuple[Body, ...]:
     """The stars and planets in the window that are out, brightest last (so that it
     is the brightest that shows where two fall on one sixel)."""
     out = []
     for _name, ra, dec, magnitude, spectral in reversed(astro.STARS):
         altitude, azimuth = astro.star(ra, dec, at, lat, lon)
         kind = "star-0" if magnitude <= 0.5 else ("star-1" if magnitude <= 1.8 else "star-2")
-        x, y = place(altitude, azimuth)
+        x, y = place(altitude, azimuth, heading)
         if altitude > 1 and _in_window(x, y) and elevation < COMES_OUT[kind]:
-            out.append(Body(x, y, kind, STAR_COLOURS[spectral]))
+            out.append(Body(x, y, kind, STAR_COLOURS[spectral], _name))
     for name in astro.PLANETS:
         altitude, azimuth = astro.planet(name, at, lat, lon)
-        x, y = place(altitude, azimuth)
+        x, y = place(altitude, azimuth, heading)
         if altitude > 1 and _in_window(x, y) and elevation < COMES_OUT["planet"]:
-            out.append(Body(x, y, "planet", PLANET_COLOURS[name]))
+            out.append(Body(x, y, "planet", PLANET_COLOURS[name], name))
     return tuple(out)
+
+
+def sky_time(at: datetime) -> datetime:
+    """The last whole step of the sky at or before ``at``."""
+    step = timedelta(minutes=SKY_STEP_MINUTES)
+    start = datetime.min.replace(tzinfo=UTC)
+    return start + (at - start) // step * step
+
+
+def worth(at: datetime, lat: float, lon: float, heading: int) -> float:
+    """How much there is to see in the night sky towards ``heading``."""
+
+    def near_middle(x: int) -> float:
+        return 1 - 0.4 * abs(x - MIDDLE) / HALF_WIDTH
+
+    seen = bodies(at, lat, lon, -90.0, heading)
+    total = sum(WORTH[b.kind] * near_middle(b.x) for b in seen)
+    altitude, azimuth = astro.moon(at, lat, lon)
+    x, y = place(altitude, azimuth, heading)
+    if altitude > 3 and _in_window(x, y):
+        total += MOON_WORTH * near_middle(x)
+    names = {b.name for b in seen}
+    total += sum(FIGURE_WORTH for stars in FIGURES.values() if names.issuperset(stars))
+    return total
+
+
+def best_heading(at: datetime, lat: float, lon: float, current: int = SOUTH) -> int:
+    """Where to aim the view at ``at``. By day and in twilight: south, or as near to
+    south as keeps the sun in the picture. At night: the direction worth the most,
+    staying with ``current`` unless another is clearly better."""
+    elevation, azimuth = sun_position(at, lat, lon)
+    if elevation >= NIGHT_BELOW:
+        off = (azimuth - SOUTH + 180) % 360 - 180
+        beyond = max(0.0, abs(off) - SUN_ROOM)
+        turn = math.ceil(beyond / TURN_STEP) * TURN_STEP
+        return round(SOUTH + math.copysign(turn, off)) % 360
+    then = sky_time(at)
+    scores = {h: worth(then, lat, lon, h) for h in range(0, 360, TURN_STEP)}
+    best = max(scores, key=lambda h: (scores[h], -abs((h - SOUTH + 180) % 360 - 180)))
+    stay = scores.get(current % 360, 0.0)
+    return best if scores[best] > stay * BETTER_BY else current % 360
+
+
+def turn_towards(current: int, target: int) -> int:
+    """One step of the view from ``current`` towards ``target``, the shorter way."""
+    off = (target - current + 180) % 360 - 180
+    if abs(off) <= TURN_STEP:
+        return target % 360
+    return round(current + math.copysign(TURN_STEP, off)) % 360
 
 
 def look(
@@ -153,14 +231,16 @@ def look(
     lat: float = 59.91,
     lon: float = 10.75,
     drift: float = 0.0,
+    heading: int = SOUTH,
 ) -> Look:
+    """The scene at ``at``, with the middle of the picture looking towards
+    ``heading``."""
     elevation, azimuth = sun_position(at, lat, lon)
     # The sun is too big to follow its azimuth all the way to the edges.
-    sun_x = max(MIDDLE - 30, min(MIDDLE + 30, place(0, azimuth)[0]))
-    step = timedelta(minutes=SKY_STEP_MINUTES)
-    then = datetime.min.replace(tzinfo=UTC) + (at - datetime.min.replace(tzinfo=UTC)) // step * step
+    sun_x = max(MIDDLE - 30, min(MIDDLE + 30, place(0, azimuth, heading)[0]))
+    then = sky_time(at)
     moon_altitude, moon_azimuth = astro.moon(then, lat, lon)
-    moon_at = place(moon_altitude, moon_azimuth)
+    moon_at = place(moon_altitude, moon_azimuth, heading)
     # The moon is drawn ten sixels tall: it counts while any of it is in the window.
     seen = LEFT - 4 <= moon_at[0] < RIGHT + 4 and -5 <= moon_at[1] < HORIZON + 5
     return Look(
@@ -171,7 +251,8 @@ def look(
         moon_at=(moon_at[0], max(MOON_TOP, moon_at[1])) if seen else None,
         moon=round(moon_phase(at) * 16) / 16 % 1,
         weather=weather,
-        bodies=bodies(then, lat, lon, elevation),
+        bodies=bodies(then, lat, lon, elevation, heading),
+        heading=heading,
         drift=round(drift / DRIFT_STEP) * DRIFT_STEP % DRIFT_SPAN,
     )
 

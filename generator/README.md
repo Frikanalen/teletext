@@ -7,7 +7,13 @@ There are three pages:
 
 - **100, the index.** The top third is the sky to the south of Oslo right now
   (`teletext_pages/sky.py`, `teletext_pages/astro.py`): east on the left, west on the
-  right, from the horizon to about 50 degrees up. By day a sliced sun, as on an 80s
+  right, from the horizon to 66 degrees up. The view is aimed at the most there
+  is to see (`sky_follows = false` keeps it to the south): by day south, or as near
+  south as keeps the sun in the picture; at night the direction where the stars, the
+  planets and the moon add up to most, with a bonus for a whole Orion, Karlsvogna or
+  Summer Triangle. It turns 15 degrees every five minutes towards that, stays unless
+  another view is clearly better. `sky_label = true` shows which way it looks on
+  the top row. By day a sliced sun, as on an 80s
   poster, stands in the sun's direction: big and banded yellow, red and pink while it
   rises and sets, small and yellow at midday. At night the 70 brightest stars, Venus,
   Mars, Jupiter and Saturn and the moon in its phase are each where they really are,
