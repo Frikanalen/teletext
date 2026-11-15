@@ -55,21 +55,23 @@ def next_change(items: list[Programme], at: datetime) -> datetime | None:
     return min(times, default=None)
 
 
-def fetch(api: str, timeout: float = 5, attempts: int = 2) -> list[Programme]:
-    """Today's schedule plus the items either side, so a programme that started
-    yesterday and the first one tomorrow are included. A failed request is tried again
-    right away, ``attempts`` times in all."""
+def fetch(api: str, timeout: float = 5, attempts: int = 2, days: int = 2) -> list[Programme]:
+    """The schedule of today and the ``days`` - 1 days after it, plus the items either
+    side, so a programme that started yesterday is included. A failed request is
+    tried again right away, ``attempts`` times in all."""
     for attempt in range(attempts):
         try:
-            return _fetch(api, timeout)
+            return _fetch(api, timeout, days)
         except (OSError, ValueError, KeyError, TypeError):
             if attempt == attempts - 1:
                 raise
     return []
 
 
-def _fetch(api: str, timeout: float) -> list[Programme]:
-    query = urllib.parse.urlencode({"date": "today", "days": 1, "surrounding": "true"})
+def _fetch(api: str, timeout: float, days: int) -> list[Programme]:
+    query = urllib.parse.urlencode(
+        {"date": "today", "days": days, "surrounding": "true", "limit": 200 * days}
+    )
     # No trailing slash: frikanalen.tv answers /api/scheduleitems/ with 404.
     url = f"{api.rstrip('/')}/scheduleitems?{query}"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})

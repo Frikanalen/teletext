@@ -29,4 +29,18 @@ data:
     always = true
     {{- end }}
     {{- end }}
+
+    [schedule]
+    enabled = {{ $p.schedule.enabled }}
+    page = {{ $p.schedule.page | quote }}
+
+    [info]
+    enabled = {{ $p.info.enabled }}
+    page = {{ $p.info.page | quote }}
+    {{- range $p.info.sections }}
+
+    [[info.section]]
+    heading = {{ .heading | quote }}
+    text = {{ .text | quote }}
+    {{- end }}
 {{- end }}

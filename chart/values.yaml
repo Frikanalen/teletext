@@ -95,9 +95,22 @@ pages:
     entries:
       - page: "200"
         title: Sendeplan
+      - page: "300"
+        title: Info
       - page: "888"
         title: Teksting
         always: true
+  # The programme schedule and the information page: the pages to name as
+  # "programme schedule page" and "additional information page" in the DVB teletext
+  # descriptor. Without sections the information page carries a short text about
+  # Frikanalen; each section is {heading, text}.
+  schedule:
+    enabled: true
+    page: "200"
+  info:
+    enabled: true
+    page: "300"
+    sections: []
   resources:
     requests:
       cpu: 10m

@@ -3,7 +3,7 @@
 Renders Frikanalen's studio teletext pages and keeps them up to date in
 [ttxd](../docs/design.md#api). Python 3.11+, standard library only.
 
-So far there is one page:
+There are three pages:
 
 - **100, the index.** The top third is a sky: a sliced sun on the horizon, as on an
   80s poster, that sits where the sun is over Oslo right now (`teletext_pages/sky.py`).
@@ -17,6 +17,18 @@ So far there is one page:
   page, unless the entry has `always = true`, and an X/27/0 packet
   (`teletext_pages/fastext.py`) links the chips to the red, green, yellow and cyan
   keys.
+
+- **200, the programme schedule** (`teletext_pages/pages.py`, `[schedule]`). From
+  the programme on air (in cyan) onwards, through tomorrow: time, title and the
+  organisation, eight programmes to a subpage and a new subpage for each day.
+- **300, information** (`[info]`). Short sections about the channel, each under a
+  heading tab. The text comes from `[[info.section]]` (`heading`, `text`), with a
+  default about Frikanalen; what does not fit goes on further subpages.
+
+200 and 300 are the pages to name as "programme schedule page" and "additional
+information page" in the DVB teletext descriptor. They share a frame: the name in
+block letters over three bars in the logo's colours, and colour keys that lead back to
+the index. On Level 2.5 they take page 100's palette and slanted glyphs.
 
 The page is drawn as one picture in sixels (`teletext_pages/art.py`). A search over
 each row decides where the colour attributes go, using foreground and background
