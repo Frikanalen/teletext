@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from . import schedule
-from .index import Entry, IndexConfig, directory, enhancements, logo, render
+from .index import Entry, IndexConfig, directory, enhancements, fastext, logo, render
 from .markup import COLS, preview
 from .ttxd import Ttxd, TtxdError
 
@@ -164,12 +164,16 @@ class IndexGenerator:
         entries = directory(self.cfg.index, self.live_pages)
         return render(self.cfg.index, current, upcoming, entries)
 
-    def page(self, at: datetime):
-        """The index subpage as sent to ttxd: rows, plus Level 2.5 data if enabled."""
-        rows = self.rows(at)
-        if not self.cfg.index.level25:
-            return rows
-        return {"rows": rows, **enhancements(self.cfg.index)}
+    def page(self, at: datetime) -> dict:
+        """The index subpage as sent to ttxd: rows, the fastext links, and Level 2.5
+        data if enabled."""
+        links = fastext(self.cfg.index, directory(self.cfg.index, self.live_pages))
+        page = {"rows": self.rows(at), "packets": [links]}
+        if self.cfg.index.level25:
+            extra = enhancements(self.cfg.index)
+            page["x26"] = extra["x26"]
+            page["packets"] += extra["packets"]
+        return page
 
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)

@@ -6,10 +6,13 @@ Renders Frikanalen's studio teletext pages and keeps them up to date in
 So far there is one page:
 
 - **100, the index.** A banner with the logo and FRIKANALEN in big mosaic
-  ("block") graphics (`teletext_pages/mosaic.py`), what is on now and next (from django-api's schedule, with
+  ("block") graphics (`teletext_pages/mosaic.py`), three bars in the logo's
+  colours, what is on now and next (from django-api's schedule, with
   DIREKTE flashing when the programme is live), and a directory of the other pages.
   A directory entry is listed only while ttxd is sending that page, unless it has
-  `always = true`.
+  `always = true`. The first four directory pages are also on the colour key
+  buttons at the bottom, and an X/27/0 packet (`teletext_pages/fastext.py`) links
+  them to the remote's red, green, yellow and cyan keys.
 
 ## Level 2.5
 
