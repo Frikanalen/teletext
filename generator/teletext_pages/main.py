@@ -15,9 +15,10 @@ import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from . import index, schedule, sky, weather
+from . import index, pages, schedule, sky, weather
 from .index import Entry, IndexConfig, directory, logo
 from .markup import COLS, preview
+from .pages import InfoConfig, ScheduleConfig, Section
 from .ttxd import Ttxd, TtxdError
 
 log = logging.getLogger("ttx-pages")
@@ -30,6 +31,8 @@ FIRST_SCHEDULE_WAIT = 60
 FIRST_SCHEDULE_RETRY = 5
 # How often the logo's DRCS page may go round the carousel (ttxd's repeat_secs).
 DRCS_REPEAT_SECS = 8
+# The wind, in m/s along the picture, that moves the clouds a sixel a minute.
+DRIFT_WIND = 8
 
 
 @dataclass
@@ -44,6 +47,9 @@ class Config:
     # If this generator stops, ttxd drops its pages after this long.
     ttl_secs: int = 600
     index: IndexConfig = field(default_factory=IndexConfig)
+    # The pages behind the index (tables [schedule] and [info]).
+    schedule_page: ScheduleConfig = field(default_factory=ScheduleConfig)
+    info_page: InfoConfig = field(default_factory=InfoConfig)
 
 
 def load_config(path: str) -> Config:
@@ -51,7 +57,17 @@ def load_config(path: str) -> Config:
         raw = tomllib.load(f)
     index = raw.pop("index", {})
     entries = [Entry(**e) for e in index.pop("entry", [])]
-    cfg = Config(**raw, index=IndexConfig(**index, entries=entries))
+    info = raw.pop("info", {})
+    sections = [Section(**s) for s in info.pop("section", [])]
+    if sections:
+        info["sections"] = sections
+    listing = raw.pop("schedule", {})
+    cfg = Config(
+        **raw,
+        index=IndexConfig(**index, entries=entries),
+        schedule_page=ScheduleConfig(**listing),
+        info_page=InfoConfig(**info),
+    )
     cfg.token = os.environ.get("TTXD_TOKEN", cfg.token)
     if cfg.refresh_secs >= cfg.ttl_secs:
         raise ValueError("refresh_secs must be shorter than ttl_secs")
@@ -186,6 +202,12 @@ class IndexGenerator:
             weather.Forecast(cfg.index.latitude, cfg.index.longitude) if cfg.index.weather else None
         )
         self.weather = sky.Weather()
+        # How far the wind has blown the clouds, in sixels, and when that was reckoned.
+        self.drift = 0.0
+        self.drift_at: float | None = None
+        # Which way the sky is looked at, and the step of the sky that was decided in.
+        self.heading = sky.SOUTH
+        self.aimed_at: datetime | None = None
         # Shared objects ttxd holds for us, by name; None until it has taken them.
         self.shared: dict | None = None
         self.shared_at = 0.0
@@ -224,8 +246,30 @@ class IndexGenerator:
         except TtxdError as e:
             log.warning("page list: %s", e)
 
+    def blow(self, clock=time.monotonic) -> None:
+        """Let the clouds drift with the wind since the last call: a sixel a minute in
+        a stiff breeze, and never faster, so the page is not sent again too often."""
+        t = clock()
+        if self.drift_at is not None:
+            speed = max(-1.0, min(1.0, self.weather.wind / DRIFT_WIND))
+            self.drift += speed * (t - self.drift_at) / 60
+        self.drift_at = t
+
+    def aim(self, at: datetime) -> None:
+        """Turn the view of the sky a step towards the best there is to see, once for
+        each step of the sky. The first time it goes straight there."""
+        index = self.cfg.index
+        step = sky.sky_time(at)
+        if not index.sky_follows or step == self.aimed_at:
+            return
+        target = sky.best_heading(at, index.latitude, index.longitude, self.heading)
+        first = self.aimed_at is None
+        self.heading = target if first else sky.turn_towards(self.heading, target)
+        self.aimed_at = step
+
     def look(self, at: datetime) -> sky.Look:
-        return sky.look(at, self.weather, self.cfg.index.latitude, self.cfg.index.longitude)
+        index = self.cfg.index
+        return sky.look(at, self.weather, index.latitude, index.longitude, self.drift, self.heading)
 
     def rows(self, at: datetime) -> list[str]:
         current, upcoming = schedule.now_and_next(self.items, at)
@@ -244,8 +288,24 @@ class IndexGenerator:
             self.cfg.index, current, upcoming, entries, self.look(at), self.shared
         )
 
-    def tickers(self, at: datetime) -> list[dict]:
-        return index.ticker(self.cfg.index, schedule.later(self.items, at))
+    def schedule_pages(self, at: datetime) -> tuple[dict, ...]:
+        entries = directory(self.cfg.index, self.live_pages)
+        return pages.schedule_pages(
+            self.cfg.schedule_page, self.cfg.index, self.items, at, entries, self.shared
+        )
+
+    def info_pages(self) -> tuple[dict, ...]:
+        entries = directory(self.cfg.index, self.live_pages)
+        return pages.info_pages(self.cfg.info_page, self.cfg.index, entries, self.shared)
+
+    def more_pages(self, at: datetime) -> list[tuple[ScheduleConfig | InfoConfig, tuple]]:
+        """The enabled pages behind the index, each with its subpages."""
+        out = []
+        if self.cfg.schedule_page.enabled:
+            out.append((self.cfg.schedule_page, self.schedule_pages(at)))
+        if self.cfg.info_page.enabled:
+            out.append((self.cfg.info_page, self.info_pages()))
+        return out
 
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)
@@ -275,7 +335,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dry_run:
         gen.refresh()
-        print_page(cfg.index.page, gen.rows(datetime.now(schedule.OSLO)))
+        now = datetime.now(schedule.OSLO)
+        print_page(cfg.index.page, gen.rows(now))
+        for page, subpages in gen.more_pages(now):
+            for n, sub in enumerate(subpages, 1):
+                print_page(f"{page.page} {n}/{len(subpages)}", sub["rows"])
         return 0
 
     if not cfg.token:
@@ -300,6 +364,19 @@ def main(argv: list[str] | None = None) -> int:
         cycle_secs=1,
         repeat_secs=DRCS_REPEAT_SECS,
     )
+    # The pages behind the index go round with the carousel: no flash.
+    more = {
+        page.page: Pusher(
+            ttxd,
+            page.page,
+            cfg.ttl_secs,
+            cfg.refresh_secs,
+            cycle_secs=page.cycle_secs,
+            flash=False,
+        )
+        for page in (cfg.schedule_page, cfg.info_page)
+        if page.enabled
+    }
     started = time.monotonic()
     while True:
         gen.refresh()
@@ -308,11 +385,15 @@ def main(argv: list[str] | None = None) -> int:
             time.sleep(FIRST_SCHEDULE_RETRY)
             continue
         now = datetime.now(schedule.OSLO)
+        gen.blow()
+        gen.aim(now)
         if cfg.index.level25:
             drcs.push(tuple(logo().drcs_subpages()))
             gen.share_assets()
         page, animation = gen.animated_page(now)
-        pusher.push(page, gen.tickers(now), animation)
+        pusher.push(page, animation=animation)
+        for cfg_page, subpages in gen.more_pages(now):
+            more[cfg_page.page].push(subpages)
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
         time.sleep(max(delay, 0.1))
 

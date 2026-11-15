@@ -3,20 +3,43 @@
 Renders Frikanalen's studio teletext pages and keeps them up to date in
 [ttxd](../docs/design.md#api). Python 3.11+, standard library only.
 
-So far there is one page:
+There are three pages:
 
-- **100, the index.** The top third is a sky: a sliced sun on the horizon, as on an
-  80s poster, that sits where the sun is over Oslo right now (`teletext_pages/sky.py`).
-  It is big and banded yellow, red and pink while it rises and sets, small and yellow
-  at midday, and at night there are stars and a moon in its phase. The weather from
-  MET Norway is drawn over it: clouds, rain, snow, fog and lightning
-  (`teletext_pages/weather.py`). Under the horizon come the logo in block graphics,
+- **100, the index.** The top third is the sky to the south of Oslo right now
+  (`teletext_pages/sky.py`, `teletext_pages/astro.py`): east on the left, west on the
+  right, from the horizon to 66 degrees up. The view is aimed at the most there
+  is to see (`sky_follows = false` keeps it to the south): by day south, or as near
+  south as keeps the sun in the picture; at night the direction where the stars, the
+  planets and the moon add up to most, with a bonus for a whole Orion, Karlsvogna or
+  Summer Triangle. It turns 15 degrees every five minutes towards that, stays unless
+  another view is clearly better. `sky_label = true` shows which way it looks on
+  the top row. By day a sliced sun, as on an 80s
+  poster, stands in the sun's direction: big and banded yellow, red and pink while it
+  rises and sets, small and yellow at midday. At night the 70 brightest stars, Venus,
+  Mars, Jupiter and Saturn and the moon in its phase are each where they really are,
+  to the sixel (about 3 degrees): stars by brightness and tinted by their kind, the
+  brightest out first at dusk. They step every five minutes. The weather from
+  MET Norway is drawn over it (`teletext_pages/weather.py`): as many clouds as the
+  cloud cover says, drifting with the wind, rain or snow as dense as it falls, fog
+  and lightning. Under the horizon come the logo in block graphics,
   what is on now and next (from django-api's schedule, with DIREKTE flashing when the
   programme is live), and four chips in the colours of the remote's keys with the
   numbers and names of other pages. A chip is shown only while ttxd is sending its
   page, unless the entry has `always = true`, and an X/27/0 packet
   (`teletext_pages/fastext.py`) links the chips to the red, green, yellow and cyan
   keys.
+
+- **200, the programme schedule** (`teletext_pages/pages.py`, `[schedule]`). From
+  the programme on air (in cyan) onwards, through tomorrow: time, title and the
+  organisation, eight programmes to a subpage and a new subpage for each day.
+- **300, information** (`[info]`). Short sections about the channel, each under a
+  heading tab. The text comes from `[[info.section]]` (`heading`, `text`), with a
+  default about Frikanalen; what does not fit goes on further subpages.
+
+200 and 300 are the pages to name as "programme schedule page" and "additional
+information page" in the DVB teletext descriptor. They share a frame: the name in
+block letters over three bars in the logo's colours, and colour keys that lead back to
+the index. On Level 2.5 they take page 100's palette and slanted glyphs.
 
 The page is drawn as one picture in sixels (`teletext_pages/art.py`). A search over
 each row decides where the colour attributes go, using foreground and background
@@ -54,22 +77,14 @@ page (see `teletext_pages/level25.py`):
   colour table 0, so they still match the remote.
 - Set `level25 = false` under `[index]` to send a plain Level 1 page.
 
-## Ticker
-
-The row above the colour keys scrolls the programmes after the next one ("SENERE").
-ttxd moves it from its own clock (`tickers` in docs/api.md), at 4 cells a second, which
-costs the publisher about 8 packets a second of its flash budget; the generator only
-sends the text, and sends the page again when that changes. Set `ticker = false`
-under `[index]` to leave it out.
-
 ## Sprites
 
 On a Level 2.5 decoder the sky moves: stars twinkle, and snow and rain fall a few
 pixels a step, on into the cell below where that is empty sky. The generator sends the
 page's X/26 triplets for each of six frames (`animation.x26` in docs/api.md) and ttxd
-steps through them, every `sprite_ms` (500 by default) under `[index]`. The triplets
-already go out with every ticker step, so at that pace the motion costs next to
-nothing more. Set `sprites = false` to keep the sky still. A ttxd too old for it gets
+steps through them, every `sprite_ms` (500 by default) under `[index]`. Each step
+is the page's header and its X/26-28 packets, about 20 packets a second of the flash
+budget at that pace. Set `sprites = false` to keep the sky still. A ttxd too old for it gets
 the page without the animation.
 
 Level 2.5 DRCS is one bit per pixel and a cell has one foreground colour, so the logo

@@ -60,12 +60,6 @@ MARK_X, MARK_Y = 4, 21  # sixels: columns 2-7, rows 8-12
 WORD_X, WORD_Y = 18, 24  # FRIKANALEN: columns 9-36, rows 9-11
 TAGLINE_ROW, TAGLINE_COL = 11, 9  # 0-based row; the text lines up with the lettering
 NOW_ROW, NEXT_ROW, BUTTON_ROW = 12, 17, 22
-# The row between the programmes and the colour keys (as ttxd counts rows, from 1),
-# where what comes later scrolls by.
-TICKER_ROW = 22
-# The label ends by setting the colour of whatever text has scrolled up to it.
-TICKER_LABEL = "{cyan}SENERE{white}"
-TICKER_SPEED = 4
 TITLE_COL = 8
 TITLE_WIDTH = COLS - TITLE_COL
 # Level 2.5: the real logo over the block one. Mark on rows 8-12 from column 2,
@@ -121,8 +115,6 @@ class IndexConfig:
     # number needs tens digit 0 and a hex units digit so nobody can key it in.
     level25: bool = True
     drcs_page: str = "10F"
-    # Scroll the programmes after the next one along the row above the colour keys.
-    ticker: bool = True
     # Level 2.5: let the stars twinkle and the rain and snow fall, a step every
     # ``sprite_ms`` (ttxd swaps the page's X/26 triplets, see docs/api.md).
     sprites: bool = True
@@ -131,6 +123,10 @@ class IndexConfig:
     latitude: float = 59.91
     longitude: float = 10.75
     weather: bool = True
+    # Aim the view of the sky at the most there is to see. Without this it is always
+    # to the south. ``sky_label`` says which way it looks, in the middle of the top row.
+    sky_follows: bool = True
+    sky_label: bool = False
 
 
 def _stamp(pic: Picture, x: int, y: int, art: list[str], colour: int) -> None:
@@ -232,6 +228,9 @@ def _picture(
     small = sky.draw(pic, at)
     pic.text(0, 1, fit(plain(cfg.footer), 16), WHITE)
     pic.text(0, COLS - 9, "TEKST-TV", CYAN)
+    if cfg.sky_label and (at.heading != sky.SOUTH or at.elevation < sky.NIGHT_BELOW):
+        # The view is aimed: say which way it looks.
+        pic.text(0, 22 - len(at.direction) // 2, at.direction, CYAN)
     _logo(pic, cfg.tagline)
     # A Level 2.5 decoder draws the real logo over these rows, and only replaces
     # characters: the block logo must not lean on background colours.
@@ -251,22 +250,6 @@ def render(
 ) -> list[str]:
     """The page's 24 rows of markup."""
     return check(picture(cfg, current, upcoming, entries, at).markup())
-
-
-def ticker(cfg: IndexConfig, later: list[Programme]) -> list[dict]:
-    """ttxd's ``tickers`` for the page: the programmes after the next one, scrolling
-    along the row above the colour keys. ttxd moves it; the page is sent as usual."""
-    if not cfg.ticker or not later:
-        return []
-    parts = [f"{{yellow}}{p.start.astimezone(OSLO):%H:%M}{{white}}{plain(p.title)}" for p in later]
-    return [
-        {
-            "row": TICKER_ROW,
-            "prefix": TICKER_LABEL,
-            "text": " ".join(parts) + " ",
-            "cells_per_sec": TICKER_SPEED,
-        }
-    ]
 
 
 def fastext(cfg: IndexConfig, entries: list[Entry]) -> dict:
@@ -358,7 +341,7 @@ SMALL_GLYPHS = {
         "............",
     ],
 }
-SMALL_COLOURS = {"star": WHITE, "rain": CYAN, "snow": WHITE}
+SMALL_COLOURS = {"rain": CYAN, "snow": WHITE}
 # The same things as sprites: a small flake and a short streak at three heights in
 # the cell, so that they fall a few pixels a step and then move on to the cell below.
 FLAKE = ["....#.#.....", ".....#......", "...#####....", ".....#......", "....#.#....."]
@@ -378,7 +361,13 @@ for _i, _top in enumerate((0, 3, 6)):
 # cell below. Rain takes two heights a frame. A star is mostly bright.
 SPRITE_FRAMES = 6
 FALL_SPEED = {"snow": 1, "rain": 2}
-TWINKLE = [0, 0, 0, 1, 2, 1]
+# The glyph a star shows in each frame, by how bright it is. A planet shines steadily.
+TWINKLE = {
+    "star-0": ["star-0", "star-0", "star-0", "star-1", "star-0", "star-0"],
+    "star-1": ["star-1", "star-1", "star-0", "star-1", "star-1", "star-2"],
+    "star-2": ["star-2", "star-2", "star-2", "star-1", "star-2", "star-2"],
+    "planet": ["star-0"] * 6,
+}
 
 
 @dataclass(frozen=True)
@@ -404,14 +393,17 @@ def assets() -> dict:
 
 
 def _finer(
-    rows: list[str], small: dict[tuple[int, int], str], glyphs: dict[str, int]
+    rows: list[str],
+    small: dict[tuple[int, int], str],
+    glyphs: dict[str, int],
+    tab_rows: tuple[int, ...] = (NOW_ROW, NEXT_ROW),
 ) -> tuple[dict[int, list[level25.Triplet]], dict[int, list[Sprite]]]:
     """Shared glyphs over cells of the Level 1 page: first the slanted ends of the
     heading tabs and the key chips, as X/26 triplets by display row, then the sky's
     stars, drops and flakes as sprites by display row. A glyph takes the colours the
     cell already has, so only cells whose mosaic is nothing but that shape qualify."""
     slants: dict[int, list[level25.Triplet]] = {}
-    for row in (NOW_ROW, NEXT_ROW, BUTTON_ROW):
+    for row in (*tab_rows, BUTTON_ROW):
         for col, (bits, _, _) in enumerate(art.shown(rows[row])):
             if bits in SLANTS and SLANTS[bits][0] in glyphs:
                 slants.setdefault(row + 1, []).append((col, 0x0D, glyphs[SLANTS[bits][0]]))
@@ -434,7 +426,7 @@ def _finer(
             if len(kinds) != 1 or None in kinds:
                 continue
             (kind,) = kinds
-            if fg == SMALL_COLOURS[kind]:
+            if fg == SMALL_COLOURS.get(kind, fg):  # a star has its own colour
                 found.append((row, col, kind, lit[0][0] * 7 + lit[0][1] * 3))
     sprites: dict[int, list[Sprite]] = {}
     for row, col, kind, seed in found:
@@ -461,10 +453,14 @@ def _sky_frame(
             out.setdefault(row, []).append((col, 0x0D, glyphs[name]))
 
     for s in (s for group in sprites.values() for s in group):
-        if frame is None:
-            put(s.row, s.col, f"star-{s.seed % 3}" if s.kind == "star" else s.kind)
-        elif s.kind == "star":
-            put(s.row, s.col, f"star-{TWINKLE[(frame + s.seed) % SPRITE_FRAMES]}")
+        if s.kind in TWINKLE:
+            put(
+                s.row,
+                s.col,
+                TWINKLE[s.kind][0 if frame is None else (frame + s.seed) % SPRITE_FRAMES],
+            )
+        elif frame is None:
+            put(s.row, s.col, s.kind)
         else:
             step = ((frame + s.seed) * FALL_SPEED[s.kind]) % SPRITE_FRAMES
             if step < 3 or not s.falls:
