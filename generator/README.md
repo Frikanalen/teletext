@@ -62,6 +62,16 @@ costs the publisher about 8 packets a second of its flash budget; the generator 
 sends the text, and sends the page again when that changes. Set `ticker = false`
 under `[index]` to leave it out.
 
+## Sprites
+
+On a Level 2.5 decoder the sky moves: stars twinkle, and snow and rain fall a few
+pixels a step, on into the cell below where that is empty sky. The generator sends the
+page's X/26 triplets for each of six frames (`animation.x26` in docs/api.md) and ttxd
+steps through them, every `sprite_ms` (500 by default) under `[index]`. The triplets
+already go out with every ticker step, so at that pace the motion costs next to
+nothing more. Set `sprites = false` to keep the sky still. A ttxd too old for it gets
+the page without the animation.
+
 Level 2.5 DRCS is one bit per pixel and a cell has one foreground colour, so the logo
 cannot be anti-aliased there. The four-colour DRCS that could do it is Level 3.5.
 
