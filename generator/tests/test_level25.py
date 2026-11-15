@@ -103,6 +103,12 @@ class IndexLogoTest(unittest.TestCase):
         self.assertTrue(modes)
         self.assertTrue(all(0x41 <= d <= 0x43 for d in modes))
         e = enhancements(IndexConfig())
+        # The colour key buttons (rows 23-24) use the standard colours from table 0.
+        x26 = e["x26"]
+        row23 = x26.index((63, 0x04, 0))
+        self.assertEqual(
+            x26[row23 + 1 : row23 + 5], [(1, 0, 1), (11, 0, 2), (21, 0, 3), (31, 0, 6)]
+        )
         # Room left for ttxd's Æ/Ø substitutions (16 packets of 13, less a terminator).
         self.assertLess(len(e["x26"]), 160)
         self.assertEqual([p["packet"] for p in e["packets"]], [27, 28])

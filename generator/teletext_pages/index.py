@@ -78,6 +78,10 @@ TAGLINE_COL = WORD_X // 2 - 1  # its colour attribute; the text lines up with th
 STRIPE = (["red", "yellow", "green"], 11, 8)  # colours, first column, cells per bar
 BUTTONS = (["red", "green", "yellow", "cyan"], 1, 9)
 BUTTON_TEXT = {"red": "{red}", "green": "{green}", "yellow": "{yellow}", "cyan": "{cyan}"}
+# Colour table 0 (the standard teletext colours), which the Level 2.5 palette leaves
+# alone: the buttons keep the colours of the remote's keys there too.
+CLUT0 = {"red": 1, "green": 2, "yellow": 3, "cyan": 6}
+BUTTON_ROW = 23
 
 
 @dataclass
@@ -165,12 +169,20 @@ def enhancements(cfg: IndexConfig) -> dict:
         text |= {(row, c) for c in range(col, canvas.cols)}
     blank = {(LOGO_ROW + row, CANVAS_COL + col) for row, col in canvas.filled() - text}
     return {
-        "x26": logo().x26(blank=blank),
+        "x26": logo().x26(extra=_button_colours(), blank=blank),
         "packets": [
             {"packet": 27, "designation": 4, "triplets": level25.x27_drcs_link(cfg.drcs_page)},
             {"packet": 28, "designation": 0, "triplets": level25.x28_palette(LOGO_COLOURS)},
         ],
     }
+
+
+def _button_colours() -> dict[int, list[level25.Triplet]]:
+    """X/26 foreground colours from table 0 for the buttons and their labels, at the
+    first cell of each (the Level 1 colour attribute sits just before it)."""
+    colours, first, width = BUTTONS
+    starts = [(first + n * (width + 1), CLUT0[c]) for n, c in enumerate(colours)]
+    return {row: [(col, 0x00, c) for col, c in starts] for row in (BUTTON_ROW, BUTTON_ROW + 1)}
 
 
 def tab(label: str, right: str = "") -> str:
