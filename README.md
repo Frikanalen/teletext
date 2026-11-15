@@ -5,7 +5,7 @@ services update over HTTP. Every frame it schedules subtitles, flash updates and
 page carousel into one OP-47 (SMPTE RDD-08) packet, which goes out in the VANC of the
 DeckLink SDI output on sdi-test1.
 
-See [docs/design.md](docs/design.md) for the design and the API.
+See [docs/design.md](docs/design.md) for the design and [docs/api.md](docs/api.md) for the publisher API.
 
 ```sh
 cargo test

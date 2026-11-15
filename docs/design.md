@@ -86,26 +86,25 @@ colours), `{double}`, `{normal}`, `{flash}`, `{steady}`, `{box}`, `{endbox}`, `{
 `{blackbg}`, `{conceal}`, `{hold}`, `{release}`, `{contiguous}`, `{separated}`, and
 `{x:HH}` for a raw code. Each attribute takes one cell. A row is at most 40 cells.
 
-## DeckLink output (next step)
+## DeckLink output
 
-A dedicated thread does scheduled playback through the Desktop Video SDK (a thin C++
-shim bound with the `cxx` crate): a constant filler frame, with each frame's SDP
-attached through `IDeckLinkVideoFrameAncillaryPackets`. The SDK's frame-completion
-callback becomes the frame clock, replacing the 50 Hz timer in `main.rs`. Reference
-lock comes later.
+`src/decklink.rs` plus `shim/decklink_shim.cpp` (a C ABI over the Desktop Video SDK,
+built with `--features decklink` and `DECKLINK_SDK_INCLUDE`). It does scheduled playback
+of black 720p50 with each frame's SDP attached through
+`IDeckLinkVideoFrameAncillaryPackets`. The SDK's frame-completion callback is the frame
+clock. Reference lock comes later.
 
-**Verification plan.** Loop a Duo 2 output into one of its inputs and capture with
-FFmpeg's DeckLink input, which can extract OP-47 into a DVB teletext stream. Then check
-the result against the encoding appliance's output.
+**Verified 2026-11-15** on sdi-test1 ("DeckLink Duo (2)", VANC line 9, descriptor field
+bit set) through the encoding appliance. The output appears as `dvb_teletext` PID 0x96
+in its TS: 50 PES/s with 5 lines each (field 1, lines 7–11). Page 100 decodes byte for
+byte in ffmpeg/libzvbi, including Æ/Ø through X/26. Subtitles on 888 show within a
+frame. ttxd uses about 2.5% of one core and 19 MB.
 
 ## Still to verify
 
-- RDD-08 SDP details against the spec and the appliance: the descriptor byte (field
-  bit, line numbers) and the length and footer fields. `src/op47.rs` documents what we
-  assume.
-- The X/26 Æ/Ø substitution on a real Level 1.5 decoder.
+- A real TV or set-top box. So far everything was decoded only with libzvbi.
 - Packet 8/30 (network ID and time) is not sent yet.
-- The host time zone must be Europe/Oslo, because the header clock uses local time.
+- The header clock uses local time, so run ttxd with `TZ=Europe/Oslo`.
 
 ## Deployment
 

@@ -15,6 +15,13 @@ pub struct Config {
     /// Line numbers put in the five OP-47 descriptors.
     #[serde(default = "default_lines")]
     pub op47_lines: [u8; 5],
+    /// DeckLink device to output on, e.g. "DeckLink Duo (2)". Without it a 50 Hz timer
+    /// stands in for the frame clock (needs the `decklink` build feature).
+    pub decklink_device: Option<String>,
+    /// VANC line carrying the OP-47 packet.
+    #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
+    #[serde(default = "default_vanc_line")]
+    pub vanc_line: u32,
     #[serde(default, rename = "publisher")]
     pub publishers: Vec<Publisher>,
 }
@@ -38,6 +45,9 @@ fn default_name() -> String {
 }
 fn default_lines() -> [u8; 5] {
     [7, 8, 9, 10, 11]
+}
+fn default_vanc_line() -> u32 {
+    9
 }
 fn default_flash() -> f64 {
     100.0

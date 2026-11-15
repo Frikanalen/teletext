@@ -5,6 +5,9 @@ snapshot = "/var/lib/ttxd/pages.json"
 service_name = "FRIKANALEN"
 # Line numbers in the five OP-47 descriptors.
 op47_lines = [7, 8, 9, 10, 11]
+# SDI output (build with --features decklink).
+decklink_device = "DeckLink Duo (2)"
+vanc_line = 9
 
 [[publisher]]
 name = "schedule"
