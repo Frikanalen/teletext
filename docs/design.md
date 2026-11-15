@@ -25,9 +25,13 @@ teletext is merged with the programme further down the chain.
 
 720p has no vertical blanking lines for teletext the way 625-line SD does. In HD-SDI,
 WST teletext is carried in VANC as OP-47 (SMPTE RDD-08): ANC packet DID 0x43, SDID 0x02,
-holding one *Subtitling Distribution Packet* (SDP) per frame with up to 5 teletext
-lines. At 50 frames/s that is 250 teletext packets/s, roughly a third of a full SD VBI
-allocation. A page is about 25 packets, so about 10 pages/s.
+holding a *Subtitling Distribution Packet* (SDP) with up to 5 teletext lines. At 50
+frames/s one SDP per frame is 250 teletext packets/s. The encoding appliance also takes
+several SDPs per frame (its multi-packet mode); ttx-inject sends 1-3 (`op47_packets`),
+so up to 750 packets/s. The appliance reserves 338.4 kbit/s for the teletext PID, which
+is 9 TS packets per 40 ms: a PES of 35 lines, a full 625-line VBI. 3 SDPs (15 lines per
+20 ms, a PES of exactly 4 TS packets) fit inside it; 4 would not. A page is about 25
+packets, so about 10 pages/s per SDP.
 
 ## Split: ttxd and ttx-inject
 
@@ -36,7 +40,7 @@ owns the DeckLink card and nothing else: no pages, no API, no scheduler.
 
 The card is the clock. On every frame callback ttx-inject takes the next frame from a
 small buffer and sends ttxd a one-byte request for another; ttxd answers each request
-with exactly one frame (up to 5 packets, each tagged carousel, flash, subtitle, 8/30 or
+with exactly one frame (up to 5 packets per SDP it will send, each tagged carousel, flash, subtitle, 8/30 or
 filler). While an injector is connected ttxd has no clock of its own; while none is, a
 50 Hz timer keeps its scheduler and T42 stream going. The buffer is 2 frames (40 ms)
 by default. If a frame is late, the card sends that frame with no teletext and

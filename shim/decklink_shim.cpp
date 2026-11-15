@@ -1,7 +1,7 @@
 // Thin C ABI over the Blackmagic Desktop Video SDK for ttxd.
 //
-// Plays a constant black 720p50 picture by scheduled playback and attaches one ANC packet
-// (the OP-47 SDP) to every frame through IDeckLinkVideoFrameAncillaryPackets. The SDK
+// Plays a constant black 720p50 picture by scheduled playback and attaches one to three
+// ANC packets (OP-47 SDPs, on the same VANC line) to every frame through IDeckLinkVideoFrameAncillaryPackets. The SDK
 // builds the SMPTE 291 packet (ADF, DID/SDID/DC, parity, checksum) from the user data words.
 // Each completed frame calls back into Rust for the next frame's packet, so the output
 // card is the frame clock.
@@ -64,7 +64,7 @@ private:
 struct Slot {
     IDeckLinkMutableVideoFrame* frame = nullptr;
     IDeckLinkVideoFrameAncillaryPackets* anc = nullptr;
-    AncPacket* packet = nullptr;
+    std::vector<AncPacket*> packets;
 };
 
 class Output : public IDeckLinkVideoOutputCallback {
@@ -76,15 +76,21 @@ public:
     ttx_fill_fn fill = nullptr;
     void* user = nullptr;
     std::vector<Slot> slots;
-    uint8_t buf[256];
+    uint8_t buf[1024];
 
-    // Refill a frame's packet from Rust and schedule it.
+    // Refill a frame's packets from Rust and schedule it. Rust writes the SDPs back to
+    // back; byte 2 of each is its length.
     HRESULT schedule(Slot& s) {
         size_t n = fill(user, buf, sizeof buf);
         s.anc->DetachAllPackets();
-        if (n > 0) {
-            s.packet->set(buf, n);
-            s.anc->AttachPacket(s.packet);
+        size_t off = 0;
+        for (AncPacket* p : s.packets) {
+            if (off + 3 > n) break;
+            size_t len = buf[off + 2];
+            if (len < 3 || off + len > n) break;
+            p->set(buf + off, len);
+            s.anc->AttachPacket(p);
+            off += len;
         }
         HRESULT r = out->ScheduleVideoFrame(s.frame, next, duration, scale);
         next += duration;
@@ -129,7 +135,8 @@ extern "C" {
 
 // Start output on the device with this display name (e.g. "DeckLink Duo (2)").
 // Returns 0 on success, or a negative step number on failure.
-int ttx_decklink_start(const char* device, uint8_t did, uint8_t sdid, uint32_t line, ttx_fill_fn fill, void* user) {
+int ttx_decklink_start(const char* device, uint8_t did, uint8_t sdid, uint32_t line, uint32_t packets_per_frame,
+                       ttx_fill_fn fill, void* user) {
     IDeckLink* dl = find_device(device);
     if (!dl) return -1;
     auto* o = new Output();
@@ -168,7 +175,7 @@ int ttx_decklink_start(const char* device, uint8_t did, uint8_t sdid, uint32_t l
             vb->Release();
         }
         if (s.frame->QueryInterface(IID_IDeckLinkVideoFrameAncillaryPackets, (void**)&s.anc) != S_OK) return -7;
-        s.packet = new AncPacket(did, sdid, line);
+        for (uint32_t k = 0; k < packets_per_frame; k++) s.packets.push_back(new AncPacket(did, sdid, line));
         o->slots.push_back(s);
     }
     for (auto& s : o->slots)
