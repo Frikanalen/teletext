@@ -1,7 +1,8 @@
 // Thin C ABI over the Blackmagic Desktop Video SDK for ttxd.
 //
 // Plays a constant black 720p50 picture by scheduled playback and attaches one to three
-// ANC packets (OP-47 SDPs, on the same VANC line) to every frame through IDeckLinkVideoFrameAncillaryPackets. The SDK
+// ANC packets (OP-47 SDPs, on the same VANC line) to every frame through
+// IDeckLinkVideoFrameAncillaryPackets. The SDK
 // builds the SMPTE 291 packet (ADF, DID/SDID/DC, parity, checksum) from the user data words.
 // Each completed frame calls back into Rust for the next frame's packet, so the output
 // card is the frame clock.
