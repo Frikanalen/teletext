@@ -137,6 +137,8 @@ pub struct Service {
     cursor: Option<PageNo>,
     buckets: BTreeMap<String, Bucket>,
     filler_mag: u8,
+    /// Pages sent but not yet ended by another header of their magazine.
+    unterminated: Vec<PageNo>,
 }
 
 impl Service {
@@ -152,6 +154,7 @@ impl Service {
             cursor: None,
             buckets: BTreeMap::new(),
             filler_mag: 1,
+            unterminated: vec![],
         }
     }
 
@@ -379,6 +382,13 @@ impl Service {
 
     fn pick(&mut self, now: SystemTime, header: &[u8; 32]) -> Option<(Tier, Packet)> {
         for tier in [Tier::Subtitle, Tier::Flash, Tier::Carousel] {
+            // End finished pages ahead of carousel packets.
+            if tier == Tier::Carousel {
+                if let Some(p) = self.terminator(header) {
+                    self.stats.filler_packets += 1;
+                    return Some((Tier::Carousel, p));
+                }
+            }
             // Continue a page in progress.
             if let Some(i) = self.inflight.iter().position(|u| u.tier == tier) {
                 let u = &self.inflight[i];
@@ -389,7 +399,8 @@ impl Service {
                 let p = u.rest.pop_front().expect("inflight units are never empty");
                 let owner = u.owner.clone();
                 if u.rest.is_empty() {
-                    self.inflight.remove(i);
+                    let page = self.inflight.remove(i).page;
+                    self.unterminated.push(page);
                 }
                 self.spend(&owner);
                 return Some((tier, p));
@@ -420,16 +431,64 @@ impl Service {
             let Some(mut unit) = unit else { continue };
             // Preempt a lower tier's page in the same magazine.
             self.inflight.retain(|u| u.page.mag != unit.page.mag);
+            self.unterminated.retain(|p| p.mag != unit.page.mag);
             let p = crate::page::header_packet(unit.page, unit.subcode, unit.flags, header);
             unit.header_sent = true;
             unit.held = unit.flags.erase;
             self.spend(&unit.owner);
-            if !unit.rest.is_empty() {
+            if unit.rest.is_empty() {
+                self.unterminated.push(unit.page);
+            } else {
                 self.inflight.push(unit);
             }
             return Some((tier, p));
         }
         None
+    }
+
+    /// A page is only complete for a decoder when the next header of its magazine
+    /// arrives. If nothing else is about to start in that magazine (a lone subtitle page,
+    /// or a magazine holding one page), send a time-filling header (page xFF) to end it.
+    /// Skipped when the carousel starts a different page of that magazine right away
+    /// (a repeat of the same page number does not end it, at least not for libzvbi).
+    fn terminator(&mut self, header: &[u8; 32]) -> Option<Packet> {
+        let inflight = &self.inflight;
+        self.unterminated
+            .retain(|p| !inflight.iter().any(|u| u.page.mag == p.mag));
+        let carousel_idle = !self.inflight.iter().any(|u| u.tier == Tier::Carousel);
+        let next = if carousel_idle {
+            self.peek_carousel()
+        } else {
+            None
+        };
+        let i = self
+            .unterminated
+            .iter()
+            .position(|p| !next.is_some_and(|n| n.mag == p.mag && n != *p))?;
+        let mag = self.unterminated.remove(i).mag;
+        Some(crate::page::header_packet(
+            PageNo::new(mag, 0xFF),
+            0x3F7F,
+            Flags::default(),
+            header,
+        ))
+    }
+
+    /// The page the carousel would start next.
+    fn peek_carousel(&self) -> Option<PageNo> {
+        let now = SystemTime::now();
+        let live = |(k, p): (&PageNo, &StoredPage)| {
+            (!p.expired(now) && !p.subpages.is_empty()).then_some(*k)
+        };
+        match self.cursor {
+            Some(c) => self
+                .pages
+                .range(c..)
+                .skip(1)
+                .chain(self.pages.range(..=c))
+                .find_map(live),
+            None => self.pages.iter().find_map(live),
+        }
     }
 
     /// Is `mag` taken by a page of a higher tier than `tier`?
@@ -566,6 +625,51 @@ mod tests {
         s.put_page("100".parse().unwrap(), page, false);
         let out = run(&mut s, 2);
         assert!(out.iter().all(|p| page_of(p) == 0xFF));
+    }
+
+    #[test]
+    fn lone_page_in_magazine_is_terminated() {
+        // 100 and 800 are alone in their magazines: each must be followed by an xFF header
+        // of its magazine before it is sent again.
+        let mut s = svc_with(&["100", "800"]);
+        let out = run(&mut s, 30);
+        assert!(s.stats.filler_packets >= 2);
+        let headers: Vec<(u8, u8)> = out
+            .iter()
+            .filter(|p| row_of(p) == 0)
+            .map(|p| (mag_of(p), page_of(p)))
+            .collect();
+        assert_eq!(&headers[..4], &[(1, 0x00), (1, 0xFF), (8, 0x00), (8, 0xFF)]);
+    }
+
+    #[test]
+    fn single_page_carousel_is_terminated() {
+        let mut s = svc_with(&["100"]);
+        let out = run(&mut s, 12);
+        let headers: Vec<u8> = out.iter().filter(|p| row_of(p) == 0).map(page_of).collect();
+        assert_eq!(&headers[..3], &[0x00, 0xFF, 0x00]);
+    }
+
+    #[test]
+    fn same_magazine_pages_need_no_terminator() {
+        let mut s = svc_with(&["100", "101"]);
+        run(&mut s, 30);
+        assert_eq!(s.stats.filler_packets, 0);
+    }
+
+    #[test]
+    fn subtitle_is_terminated_promptly() {
+        let mut s = svc_with(&["100", "101"]);
+        s.subtitle("888".parse().unwrap(), &["Hei".into()]).unwrap();
+        let out = run(&mut s, 3);
+        let m8: Vec<(u8, u8)> = out
+            .iter()
+            .filter(|p| mag_of(p) == 8)
+            .map(|p| (row_of(p), if row_of(p) == 0 { page_of(p) } else { 0 }))
+            .collect();
+        // Header 888, its row(s), then the 8FF terminator.
+        assert_eq!(m8.first(), Some(&(0, 0x88)));
+        assert_eq!(m8.last(), Some(&(0, 0xFF)));
     }
 
     #[test]
