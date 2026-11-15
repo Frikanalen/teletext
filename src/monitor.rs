@@ -232,7 +232,7 @@ impl Analyzer {
 
     fn on_pat(&mut self, d: &[u8]) {
         let Some(s) = section(d) else { return };
-        for e in s.chunks_exact(4) {
+        for e in s.as_chunks::<4>().0 {
             let program = u16::from(e[0]) << 8 | u16::from(e[1]);
             if program != 0 {
                 self.pmt_pid = Some(u16::from(e[2] & 0x1F) << 8 | u16::from(e[3]));
