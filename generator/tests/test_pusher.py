@@ -59,6 +59,13 @@ class PusherTest(unittest.TestCase):
         self.p.push({"rows": ["b"], "x26": [(42, 4, 0)]})
         self.assertEqual(self.ttxd.calls[2], ("put", "100", True, 600))
 
+    def test_ticker_change_resends_the_page(self):
+        tick = [{"row": 22, "text": "20:00 Nyheter "}]
+        self.p.push(["a"], tick)
+        self.p.push(["a"], tick)
+        self.p.push(["a"], [{"row": 22, "text": "21:00 Film "}])
+        self.assertEqual([c[0] for c in self.ttxd.calls], ["put", "put"])
+
     def test_several_subpages(self):
         self.p.push((["a"], ["b"]))
         self.t = 10

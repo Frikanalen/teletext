@@ -355,6 +355,14 @@ impl Service {
     /// Store a page (replacing it). With `flash`, also send it ahead of the carousel.
     pub fn put_page(&mut self, no: PageNo, page: StoredPage, flash: bool) {
         let before = self.mot_inputs();
+        let mut page = page;
+        // A page sent again with the same motion (a refresh, or new text elsewhere)
+        // keeps scrolling from where it was instead of starting over.
+        let same =
+            |old: &&StoredPage| old.tickers == page.tickers && old.animation == page.animation;
+        if let Some(old) = self.pages.get(&no).filter(same) {
+            page.motion = old.motion.clone();
+        }
         self.put_page_only(no, page, flash);
         if self.mot_inputs() != before {
             self.rebuild_assets();
@@ -670,8 +678,14 @@ impl Service {
             let unit = match tier {
                 Tier::Subtitle => self.subtitles.pop_front(),
                 Tier::Flash => {
+                    // A flash waits for a carousel page of its magazine to finish (a
+                    // few frames at most) rather than cut it short: with a ticker
+                    // stepping several times a second, a page that is cut on every
+                    // pass would never arrive whole.
                     let pos = self.flashes.iter().position(|u| {
-                        self.budget_ok(&u.owner) && !self.busy_above(u.page.mag, tier)
+                        self.budget_ok(&u.owner)
+                            && !self.busy_above(u.page.mag, tier)
+                            && !self.carousel_in_flight(u.page.mag)
                     });
                     pos.and_then(|i| self.flashes.remove(i))
                 }
@@ -690,7 +704,21 @@ impl Service {
                 }
             };
             let Some(mut unit) = unit else { continue };
-            // Preempt a lower tier's page in the same magazine.
+            // Preempt a lower tier's page in the same magazine. A carousel page cut
+            // short this way goes out again from the start.
+            let cut = self
+                .inflight
+                .iter()
+                .find(|u| u.page.mag == unit.page.mag && u.tier == Tier::Carousel)
+                .map(|u| u.page);
+            if let Some(cut) = cut {
+                if self.cursor == Some(cut) {
+                    self.cursor = self.pages.range(..cut).next_back().map(|(k, _)| *k);
+                }
+                if let Some(p) = self.pages.get_mut(&cut) {
+                    p.last_sent = None;
+                }
+            }
             self.inflight.retain(|u| u.page.mag != unit.page.mag);
             self.unterminated.retain(|p| p.mag != unit.page.mag);
             let p = crate::page::header_packet(unit.page, unit.subcode, unit.flags, header);
@@ -758,6 +786,12 @@ impl Service {
         self.inflight
             .iter()
             .any(|u| u.page.mag == mag && rank(u.tier) < rank(tier))
+    }
+
+    fn carousel_in_flight(&self, mag: u8) -> bool {
+        self.inflight
+            .iter()
+            .any(|u| u.page.mag == mag && u.tier == Tier::Carousel)
     }
 
     fn spend(&mut self, owner: &Option<String>) {
@@ -864,10 +898,16 @@ mod tests {
         let now = SystemTime::now();
         let rows = BTreeMap::from([(5u8, "Nå på lufta".to_string())]);
         s.flash_rows("102".parse().unwrap(), 0, &rows, now).unwrap();
-        let f = s.next_frame(now);
-        // Page 102's header and changed row come before the carousel resumes on magazine 1.
-        assert_eq!(page_of(&f[0]), 0x02);
-        assert!(f.iter().any(|p| row_of(p) == 5));
+        // The carousel page in flight on magazine 1 is finished first, not cut short;
+        // then page 102's header and changed row go out ahead of the next page.
+        let f: Vec<Packet> = (0..8).flat_map(|_| s.next_frame(now)).collect();
+        let at = f
+            .iter()
+            .position(|p| row_of(p) == 5)
+            .expect("the flashed row");
+        assert_eq!((row_of(&f[at - 1]), page_of(&f[at - 1])), (0, 0x02));
+        let headers = f[..at - 1].iter().filter(|p| row_of(p) == 0).count();
+        assert_eq!(headers, 0, "no other page started before the flash");
         assert_eq!(
             s.pages[&"102".parse().unwrap()].subpages[0].preview()[4],
             "Nå på lufta"
@@ -1041,5 +1081,39 @@ mod tests {
         // About 20 steps in 2 s, each a different row.
         assert!(rows24.len() >= 15, "{} distinct ticker rows", rows24.len());
         assert_eq!(s.take_motion_updates(), vec![no]);
+        // The ticker never cuts the page's own carousel pass short, and the carousel
+        // still gets its turn between steps: every pass that starts with row 1 goes
+        // on to the page's last row, and there are several in 4 s.
+        let mut s2 = svc_with(&["200"]);
+        s2.set_flash_budget("t", 100.0);
+        let page = s2.pages.get_mut(&no).unwrap();
+        page.owner = "t".into();
+        page.subpages[0] = Content::from_markup(&vec!["x".to_string(); 23]).unwrap();
+        page.tickers = s.pages[&no].tickers.clone();
+        let mut rows: Vec<u8> = vec![];
+        for f in 0..200u64 {
+            for p in s2.next_frame(start + Duration::from_millis(20 * f)) {
+                if mag_of(&p) == 2 {
+                    rows.push(row_of(&p));
+                }
+            }
+        }
+        let passes: Vec<&[u8]> = rows
+            .split(|r| *r == 0)
+            .filter(|p| p.first() == Some(&1))
+            .collect();
+        assert!(passes.len() > 3);
+        for pass in &passes[..passes.len() - 1] {
+            assert_eq!(pass.last(), Some(&24), "{pass:?}");
+        }
+        // The same page again keeps its place; a changed ticker starts over.
+        let at = format!("{:?}", s.pages[&no].motion);
+        let mut again = s.pages[&no].clone();
+        again.motion = Default::default();
+        s.put_page(no, again.clone(), false);
+        assert_eq!(format!("{:?}", s.pages[&no].motion), at);
+        again.tickers[0].cells_per_sec = 5.0;
+        s.put_page(no, again, false);
+        assert_ne!(format!("{:?}", s.pages[&no].motion), at);
     }
 }

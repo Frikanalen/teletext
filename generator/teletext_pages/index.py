@@ -60,6 +60,12 @@ MARK_X, MARK_Y = 4, 21  # sixels: columns 2-7, rows 8-12
 WORD_X, WORD_Y = 18, 24  # FRIKANALEN: columns 9-36, rows 9-11
 TAGLINE_ROW, TAGLINE_COL = 11, 9  # 0-based row; the text lines up with the lettering
 NOW_ROW, NEXT_ROW, BUTTON_ROW = 12, 17, 22
+# The row between the programmes and the colour keys (as ttxd counts rows, from 1),
+# where what comes later scrolls by.
+TICKER_ROW = 22
+# The label ends by setting the colour of whatever text has scrolled up to it.
+TICKER_LABEL = "{cyan}SENERE{white}"
+TICKER_SPEED = 4
 TITLE_COL = 8
 TITLE_WIDTH = COLS - TITLE_COL
 # Level 2.5: the real logo over the block one. Mark on rows 8-12 from column 2,
@@ -115,6 +121,8 @@ class IndexConfig:
     # number needs tens digit 0 and a hex units digit so nobody can key it in.
     level25: bool = True
     drcs_page: str = "10F"
+    # Scroll the programmes after the next one along the row above the colour keys.
+    ticker: bool = True
     # Where the sky is, and whether to ask MET Norway for its weather.
     latitude: float = 59.91
     longitude: float = 10.75
@@ -239,6 +247,22 @@ def render(
 ) -> list[str]:
     """The page's 24 rows of markup."""
     return check(picture(cfg, current, upcoming, entries, at).markup())
+
+
+def ticker(cfg: IndexConfig, later: list[Programme]) -> list[dict]:
+    """ttxd's ``tickers`` for the page: the programmes after the next one, scrolling
+    along the row above the colour keys. ttxd moves it; the page is sent as usual."""
+    if not cfg.ticker or not later:
+        return []
+    parts = [f"{{yellow}}{p.start.astimezone(OSLO):%H:%M}{{white}}{plain(p.title)}" for p in later]
+    return [
+        {
+            "row": TICKER_ROW,
+            "prefix": TICKER_LABEL,
+            "text": " ".join(parts) + " ",
+            "cells_per_sec": TICKER_SPEED,
+        }
+    ]
 
 
 def fastext(cfg: IndexConfig, entries: list[Entry]) -> dict:

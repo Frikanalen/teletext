@@ -44,6 +44,11 @@ def now_and_next(items: list[Programme], at: datetime) -> tuple[Programme | None
     return current, upcoming
 
 
+def later(items: list[Programme], at: datetime, count: int = 5) -> list[Programme]:
+    """The programmes after the next one to start, at most ``count`` of them."""
+    return [p for p in items if p.start > at][1 : 1 + count]
+
+
 def next_change(items: list[Programme], at: datetime) -> datetime | None:
     """The next start or end after ``at``, when now/next changes."""
     times = [t for p in items for t in (p.start, p.end) if t > at]

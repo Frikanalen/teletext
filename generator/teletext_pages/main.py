@@ -100,13 +100,18 @@ class Pusher:
         self.repeat_secs = repeat_secs
         self.drcs_page = drcs_page
         self.sent: list | None = None
+        self.sent_tickers: list[dict] = []
         self.sent_at = 0.0
 
-    def push(self, page: list) -> None:
-        """``page`` is a single subpage (rows or dict) or, as a tuple, several."""
+    def push(self, page: list, tickers: list[dict] | None = None) -> None:
+        """``page`` is a single subpage (rows or dict) or, as a tuple, several.
+        ``tickers`` are rows ttxd scrolls (docs/api.md); a change to them resends the
+        whole page."""
         subpages = list(page) if isinstance(page, tuple) else [page]
+        tickers = tickers or []
         rows_only = (
             self.sent is not None
+            and tickers == self.sent_tickers
             and len(subpages) == len(self.sent) == 1
             and _extras(subpages[0]) == _extras(self.sent[0])
         )
@@ -116,7 +121,7 @@ class Pusher:
             whole = len(changed) > MAX_FLASH_ROWS
         else:
             changed = {}
-            whole = self.sent != subpages
+            whole = self.sent != subpages or tickers != self.sent_tickers
         stale = self.clock() - self.sent_at >= self.refresh_secs
         try:
             if whole or stale:
@@ -130,6 +135,7 @@ class Pusher:
                     flags=self.flags,
                     repeat_secs=self.repeat_secs,
                     drcs_page=self.drcs_page,
+                    tickers=tickers,
                 )
                 self.sent_at = self.clock()
                 log.info("page %s sent%s", self.page, " with flash" if flash else "")
@@ -137,6 +143,7 @@ class Pusher:
                 self.ttxd.flash_rows(self.page, changed)
                 log.info("page %s rows %s flashed", self.page, sorted(changed))
             self.sent = subpages
+            self.sent_tickers = tickers
         except TtxdError as e:
             # Start over with a whole page next time; ttxd may have lost it.
             self.sent = None
@@ -206,6 +213,9 @@ class IndexGenerator:
         entries = directory(self.cfg.index, self.live_pages)
         return index.page(self.cfg.index, current, upcoming, entries, self.look(at), self.shared)
 
+    def tickers(self, at: datetime) -> list[dict]:
+        return index.ticker(self.cfg.index, schedule.later(self.items, at))
+
     def wake_at(self, at: datetime) -> datetime:
         wake = at + timedelta(seconds=self.cfg.poll_secs)
         change = schedule.next_change(self.items, at)
@@ -270,7 +280,7 @@ def main(argv: list[str] | None = None) -> int:
         if cfg.index.level25:
             drcs.push(tuple(logo().drcs_subpages()))
             gen.share_assets()
-        pusher.push(gen.page(now))
+        pusher.push(gen.page(now), gen.tickers(now))
         delay = (gen.wake_at(now) - datetime.now(schedule.OSLO)).total_seconds()
         time.sleep(max(delay, 0.1))
 
