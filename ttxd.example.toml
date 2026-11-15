@@ -11,6 +11,9 @@ initial_page = "100"
 network_id = 0
 # ttx-inject (on the SDI host) connects here and asks for each frame.
 inject_listen = "0.0.0.0:4243"
+# Hidden pages ttxd builds from the shared Level 2.5 assets (PUT /v1/assets).
+# gpop_page = "8E8"
+# gdrcs_page = "8E9"
 
 [[publisher]]
 name = "schedule"
@@ -33,4 +36,6 @@ subtitles = true
 name = "studio"
 token = "change-me-studio"
 pages = ["100-1FF"]
+# May set the shared palette, glyphs and objects (PUT /v1/assets).
+assets = true
 flash_per_sec = 50

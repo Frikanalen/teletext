@@ -3,6 +3,7 @@
 use crate::charset::{NATIONAL_C12_C14, decode_g0, decode_g2, encode_char};
 use crate::ham::{ham84, ham2418, parity};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 
 /// One teletext line: 42 bytes after clock run-in and framing code (the T42 format).
@@ -79,6 +80,10 @@ pub struct Content {
     /// already coded bytes after the designation).
     #[serde(default)]
     pub extra: Vec<(u8, u8, Vec<u8>)>,
+    /// Data rows already coded by ttxd (row 1..=25 to 40 bytes, sent as they are). A
+    /// page with coded rows is a data page (MOT, GDRCS, GPOP): only these rows go out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub coded: BTreeMap<u8, Vec<u8>>,
 }
 
 /// An enhancement triplet before Hamming 24/18 coding: (address, mode, data).
@@ -94,6 +99,7 @@ impl Default for Content {
             g2: vec![],
             x26: vec![],
             extra: vec![],
+            coded: BTreeMap::new(),
         }
     }
 }
@@ -313,7 +319,7 @@ pub struct Flags {
     pub inhibit: bool,         // C10
 }
 
-fn mrag(mag: u8, row: u8) -> [u8; 2] {
+pub(crate) fn mrag(mag: u8, row: u8) -> [u8; 2] {
     [ham84((mag & 7) | ((row & 1) << 3)), ham84(row >> 1)]
 }
 
@@ -349,7 +355,7 @@ pub fn row_packet(mag: u8, row: u8, codes: &[u8]) -> Packet {
     p
 }
 
-fn triplet(address: u8, mode: u8, data: u8) -> [u8; 3] {
+pub(crate) fn triplet(address: u8, mode: u8, data: u8) -> [u8; 3] {
     ham2418(address as u32 & 0x3F | (mode as u32 & 0x1F) << 6 | (data as u32 & 0x7F) << 11)
 }
 
@@ -460,6 +466,15 @@ pub fn page_packets(
         p[2] = ham84(*designation);
         p[3..].copy_from_slice(&bytes[..39]);
         out.push(p);
+    }
+    if !c.coded.is_empty() {
+        for (&row, bytes) in &c.coded {
+            let mut p = [0u8; 42];
+            p[..2].copy_from_slice(&mrag(page.mag, row));
+            p[2..].copy_from_slice(&bytes[..40]);
+            out.push(p);
+        }
+        return out;
     }
     out.extend(x26_packets(page.mag, &merge_x26(&c.x26, &c.g2)));
     for (i, r) in c.rows.iter().enumerate() {

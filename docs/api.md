@@ -169,6 +169,63 @@ the initial page (`initial_page` in the config, default 100), the network identi
 code (`network_id`, default 0 since Frikanalen has none registered), and the date and
 UTC time with the local offset, which some decoders use to set their clock.
 
+### `PUT /assets`: shared Level 2.5 assets
+
+Defines a magazine palette, global DRCS glyphs and global objects once, for every page to
+use. It needs a publisher with `assets = true`. A PUT replaces all three, and `{}` clears
+them.
+
+```json
+{
+  "palette": {
+    "colours": ["#0f1926", "#f15645", "#64bc50", "#ffc709", "#18263a", "#73284e", "#faaa3f", "#f5efe4"],
+    "screen": 16, "row": 16, "remap": 6, "black_bg_substitution": false
+  },
+  "glyphs": [
+    { "name": "logo-0", "rows": ["....####....", "...#....#...", "... 10 rows of 12"] }
+  ],
+  "objects": [
+    { "name": "logo", "type": "adaptive", "x26": [[0, 0, 22], [0, 13, 0], [1, 13, 1], [41, 4, 0], [0, 13, 2]] }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `palette` | up to 16 colours for colour tables 2 (entries 16–23) and 3 (24–31), default `screen` and `row` colour (0–31), colour table `remap` (0–7, as in X/28/0: 6 makes the Level 1 colours pick from table 2) and `black_bg_substitution`. Sent as M/29/0 in every magazine in use; a page that sends its own X/28/0 keeps its own |
+| `glyphs` | up to 48 DRCS characters, 12×10 pixels, one bit each: 10 strings of 12, `#` for a lit pixel and `.` for an unlit one. A glyph takes the cell's foreground colour |
+| `objects` | named runs of X/26 triplets, up to 8 of each `type` (`active`, `adaptive`, `passive`). Positions inside an object are relative to where it's placed: column triplets act on the placement row, and row address 41 means the row below it, 42 two rows below, and so on. Adaptive objects keep the page's colours where they don't set their own, so they suit logos over a background |
+
+The reply (and `GET /assets`) gives where things ended up:
+
+```json
+{ "assets": { "...": "as stored" },
+  "glyphs": { "logo-0": 0 },
+  "objects": { "logo": [56, 18, 0] },
+  "pages": { "gpop": "8E8", "gdrcs": "8E9" } }
+```
+
+To use them from a page's `x26`:
+
+- **Glyph** `n` in a cell: the column triplet `[column, 13, n]` (mode 0x0D, global DRCS),
+  after a row triplet for that row, for example `[[45, 4, 0], [10, 0, 22], [10, 13, 0]]`
+  puts glyph 0 in row 5, column 10, in colour 22.
+- **Object**: move the active position to its top left corner, then send its invocation
+  triplet: `[[45, 4, 10], [56, 18, 0]]` places `logo` at row 5, column 10. Two triplets,
+  however big the object is.
+
+ttxd builds three kinds of hidden page from the assets and sends them in the carousel:
+the Magazine Organisation Table (page `mFE` of each magazine that has pages, every 5 s,
+carrying the M/29/0 palette and links to the global pages), the global object page
+(`8E8`) and the global DRCS page (`8E9`), each every 10 s. These page numbers, and `xFD`
+to `xFF` of every magazine, are reserved: a PUT to them gives `403`. Change the global
+page numbers with `gpop_page` and `gdrcs_page` in the config. A decoder that has just
+tuned in shows a page in plain colours for up to 5 s before the palette arrives.
+
+### `GET /assets`
+
+The stored assets and their layout, as above.
+
 ## Public feed for the web viewer
 
 A second listener (`public_listen`, port 8081 by convention) serves one read-only route,

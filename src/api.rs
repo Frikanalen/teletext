@@ -6,11 +6,14 @@
 //!   PUT    /v1/pages/{page}              store a page   {subpages:[[row,...] | {rows, raw_rows, x26, packets},...], cycle_secs?, ttl_secs?, flash?, flags?}
 //!   DELETE /v1/pages/{page}
 //!   POST   /v1/pages/{page}/flash        replace rows now {rows:{"5":"text"}, subpage?}
+//!   GET    /v1/assets                    shared Level 2.5 assets and where they ended up
+//!   PUT    /v1/assets                    {palette?, glyphs?:[{name, rows}], objects?:[{name, type, x26}]}
 //!   PUT    /v1/status_display            8/30 status line {text}; "" resets to the service name
 //!   POST   /v1/subtitles                 show lines     {lines:["...",...], page?}; [] clears
 //!
 //! Writes need `Authorization: Bearer <token>`; each publisher may only touch its own pages.
 
+use crate::assets::Assets;
 use crate::config::Publisher;
 use crate::page::{Content, PageNo, Triplet};
 use crate::service::{PageFlags, Service, StoredPage};
@@ -56,6 +59,12 @@ fn auth<'a>(st: &'a AppState, h: &HeaderMap) -> Result<&'a Publisher, ApiError> 
 
 fn auth_page<'a>(st: &'a AppState, h: &HeaderMap, page: PageNo) -> Result<&'a Publisher, ApiError> {
     let p = auth(st, h)?;
+    if st.svc.lock().unwrap().reserved(page) {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            format!("page {page} is reserved for ttxd"),
+        ));
+    }
     if !p.may_write(page) {
         return Err(err(
             StatusCode::FORBIDDEN,
@@ -80,6 +89,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pages/{page}/flash", post(flash))
         .route("/v1/subtitles", post(subtitles))
         .route("/v1/status_display", put(status_display))
+        .route("/v1/assets", get(get_assets).put(put_assets))
         .with_state(state)
 }
 
@@ -282,6 +292,45 @@ async fn flash(
     Ok(Json(json!({ "ok": true })))
 }
 
+fn assets_json(svc: &Service) -> Value {
+    let layout = svc.assets.validate().unwrap_or_default();
+    json!({
+        "assets": svc.assets,
+        "glyphs": layout.glyphs,
+        "objects": layout.objects,
+        "pages": { "gpop": svc.gpop_page.to_string(), "gdrcs": svc.gdrcs_page.to_string() },
+    })
+}
+
+async fn get_assets(State(st): State<AppState>) -> Json<Value> {
+    Json(assets_json(&st.svc.lock().unwrap()))
+}
+
+async fn put_assets(
+    State(st): State<AppState>,
+    h: HeaderMap,
+    Json(body): Json<Assets>,
+) -> ApiResult {
+    let p = auth(&st, &h)?;
+    if !p.assets {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            format!("{} may not set the shared assets", p.name),
+        ));
+    }
+    body.validate()
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))?;
+    let mut svc = st.svc.lock().unwrap();
+    for (no, present) in svc.set_assets(body) {
+        if present {
+            st.feed.page(&svc, no);
+        } else {
+            st.feed.delete(no);
+        }
+    }
+    Ok(Json(assets_json(&svc)))
+}
+
 #[derive(Deserialize)]
 struct Subtitles {
     lines: Vec<String>,
@@ -360,6 +409,7 @@ mod tests {
             pages: vec!["200-29F".into()],
             subtitles: false,
             status_display: true,
+            assets: true,
             flash_per_sec: 100.0,
         }];
         (
@@ -532,6 +582,72 @@ mod tests {
         assert_eq!(
             svc.lock().unwrap().pages[&"20F".parse().unwrap()].repeat_secs,
             Some(30)
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_assets() {
+        let (app, svc) = app();
+        call(
+            &app,
+            "PUT",
+            "/v1/pages/200",
+            Some("secret"),
+            json!({ "subpages": [["x"]] }),
+        )
+        .await;
+        let glyph = vec!["#".repeat(12); 10];
+        let body = json!({
+            "palette": { "colours": ["#0f1926", "#f15645"], "screen": 16, "row": 16, "remap": 6 },
+            "glyphs": [{ "name": "dot", "rows": glyph }],
+            "objects": [{ "name": "logo", "type": "passive", "x26": [[0, 13, 0]] }]
+        });
+        let (s, v) = call(&app, "PUT", "/v1/assets", Some("secret"), body).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        assert_eq!(v["glyphs"]["dot"], 0);
+        assert_eq!(v["objects"]["logo"], json!([56, 19, 0]));
+        {
+            let svc = svc.lock().unwrap();
+            for p in ["2FE", "8E8", "8E9"] {
+                assert_eq!(svc.pages[&p.parse().unwrap()].owner, "ttxd", "{p}");
+            }
+            assert_eq!(
+                svc.pages[&"2FE".parse().unwrap()].subpages[0].extra[0].0,
+                29
+            );
+        }
+        // A page in a new magazine gets its own MOT; ttxd's pages are off limits.
+        call(
+            &app,
+            "PUT",
+            "/v1/pages/250",
+            Some("secret"),
+            json!({ "subpages": [["y"]] }),
+        )
+        .await;
+        let (s, _) = call(
+            &app,
+            "PUT",
+            "/v1/pages/2FE",
+            Some("secret"),
+            json!({ "subpages": [["z"]] }),
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN);
+        let (_, v) = call(&app, "GET", "/v1/assets", None, Value::Null).await;
+        assert_eq!(v["pages"]["gdrcs"], "8E9");
+        let bad = json!({ "glyphs": [{ "name": "short", "rows": ["#"] }] });
+        let (s, _) = call(&app, "PUT", "/v1/assets", Some("secret"), bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST);
+        // Clearing the assets removes ttxd's pages.
+        let (s, _) = call(&app, "PUT", "/v1/assets", Some("secret"), json!({})).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(
+            svc.lock()
+                .unwrap()
+                .pages
+                .values()
+                .all(|p| p.owner != "ttxd")
         );
     }
 }

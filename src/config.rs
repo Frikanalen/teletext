@@ -26,6 +26,11 @@ pub struct Config {
     /// Where ttx-inject connects for frames, e.g. "0.0.0.0:4243". Without it, or while no
     /// injector is connected, a 50 Hz timer stands in for the frame clock.
     pub inject_listen: Option<String>,
+    /// Pages for the shared Level 2.5 assets (global objects and global DRCS).
+    #[serde(default = "default_gpop")]
+    pub gpop_page: PageNo,
+    #[serde(default = "default_gdrcs")]
+    pub gdrcs_page: PageNo,
     #[serde(default, rename = "publisher")]
     pub publishers: Vec<Publisher>,
 }
@@ -46,6 +51,9 @@ pub struct Publisher {
     /// May set the 8/30 status display (e.g. to the programme on air).
     #[serde(default)]
     pub status_display: bool,
+    /// May set the shared Level 2.5 assets (magazine palette, global glyphs and objects).
+    #[serde(default)]
+    pub assets: bool,
     /// Flash budget in packets per second (a frame carries 5, so 250/s is the whole line).
     #[serde(default = "default_flash")]
     pub flash_per_sec: f64,
@@ -59,6 +67,12 @@ fn default_name() -> String {
 }
 fn default_initial_page() -> PageNo {
     PageNo::new(1, 0x00)
+}
+fn default_gpop() -> PageNo {
+    PageNo::new(8, 0xE8)
+}
+fn default_gdrcs() -> PageNo {
+    PageNo::new(8, 0xE9)
 }
 fn default_flash() -> f64 {
     100.0
@@ -105,6 +119,7 @@ mod tests {
             pages: vec!["200-29F".into(), "888".into()],
             subtitles: false,
             status_display: false,
+            assets: false,
             flash_per_sec: 1.0,
         };
         assert!(p.may_write("200".parse().unwrap()));

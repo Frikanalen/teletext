@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
-use ttxd::service::{Service, StoredPage};
+use ttxd::assets::Assets;
+use ttxd::service::{Service, StoredPage, TTXD_OWNER};
 use ttxd::{api, config, feed, link, p830, page};
 
 fn load_snapshot(path: &std::path::Path) -> BTreeMap<page::PageNo, StoredPage> {
@@ -23,14 +24,40 @@ fn load_snapshot(path: &std::path::Path) -> BTreeMap<page::PageNo, StoredPage> {
     }
 }
 
+fn assets_path(snapshot: &std::path::Path) -> std::path::PathBuf {
+    snapshot.with_file_name("assets.json")
+}
+
+fn load_assets(path: &std::path::Path) -> Assets {
+    std::fs::read(path)
+        .ok()
+        .and_then(|b| {
+            serde_json::from_slice(&b)
+                .map_err(|e| tracing::warn!("ignoring unreadable {}: {e}", path.display()))
+                .ok()
+        })
+        .unwrap_or_default()
+}
+
+fn write_atomic(path: &std::path::Path, bytes: Vec<u8>) -> anyhow::Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Save the publishers' pages (not the ones ttxd builds from the assets) and the assets.
 fn save_snapshot(
     path: &std::path::Path,
     pages: &BTreeMap<page::PageNo, StoredPage>,
+    assets: &Assets,
 ) -> anyhow::Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, serde_json::to_vec(pages)?)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    let own: BTreeMap<_, _> = pages
+        .iter()
+        .filter(|(_, p)| p.owner != TTXD_OWNER)
+        .collect();
+    write_atomic(path, serde_json::to_vec(&own)?)?;
+    write_atomic(&assets_path(path), serde_json::to_vec(assets)?)
 }
 
 #[tokio::main]
@@ -45,6 +72,14 @@ async fn main() -> anyhow::Result<()> {
 
     cfg.resolve_tokens()?;
     let mut svc = Service::new(&cfg.service_name, load_snapshot(&cfg.snapshot));
+    svc.gpop_page = cfg.gpop_page;
+    svc.gdrcs_page = cfg.gdrcs_page;
+    let assets = load_assets(&assets_path(&cfg.snapshot));
+    if let Err(e) = assets.validate() {
+        tracing::warn!("ignoring stored assets: {e}");
+    } else {
+        svc.set_assets(assets);
+    }
     svc.service_data = Some(p830::ServiceData {
         initial_page: cfg.initial_page,
         network_id: cfg.network_id,
@@ -116,15 +151,15 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
-                let pages = {
+                let (pages, assets) = {
                     let mut s = svc.lock().unwrap();
                     if !s.dirty {
                         continue;
                     }
                     s.dirty = false;
-                    s.pages.clone()
+                    (s.pages.clone(), s.assets.clone())
                 };
-                if let Err(e) = save_snapshot(&path, &pages) {
+                if let Err(e) = save_snapshot(&path, &pages, &assets) {
                     tracing::error!("saving snapshot: {e:#}");
                 }
             }
