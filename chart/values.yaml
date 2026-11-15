@@ -13,6 +13,9 @@ config:
   serviceName: FRIKANALEN
   initialPage: "100"
   networkId: 0
+  # Hidden pages ttxd builds from the shared Level 2.5 assets (PUT /v1/assets).
+  gpopPage: "8E8"
+  gdrcsPage: "8E9"
 
 # Publishers and the pages they may write. Each token comes from key `tokenKey` of
 # the Secret named in `tokens.secretName`.
@@ -21,6 +24,7 @@ publishers:
     tokenKey: pages
     pages: ["100-7FF"]
     statusDisplay: true
+    assets: true
     flashPerSec: 100
   - name: subtitles
     tokenKey: subtitles

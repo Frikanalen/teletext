@@ -15,6 +15,8 @@ data:
     service_name = {{ .Values.config.serviceName | quote }}
     initial_page = {{ .Values.config.initialPage | quote }}
     network_id = {{ .Values.config.networkId | int }}
+    gpop_page = {{ .Values.config.gpopPage | quote }}
+    gdrcs_page = {{ .Values.config.gdrcsPage | quote }}
     {{- range .Values.publishers }}
 
     [[publisher]]
@@ -26,6 +28,9 @@ data:
     {{- end }}
     {{- if .statusDisplay }}
     status_display = true
+    {{- end }}
+    {{- if .assets }}
+    assets = true
     {{- end }}
     {{- with .flashPerSec }}
     flash_per_sec = {{ . }}

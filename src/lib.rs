@@ -4,6 +4,7 @@
 //! [`link`] to `ttx-inject`, which puts them on SDI as OP-47.
 
 pub mod api;
+pub mod assets;
 pub mod charset;
 pub mod config;
 #[cfg(feature = "decklink")]

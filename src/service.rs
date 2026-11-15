@@ -6,6 +6,7 @@
 //! progress is never interleaved with another page of its own magazine. A higher tier
 //! that needs a busy magazine preempts the lower tier's page (it is resent later).
 
+use crate::assets::Assets;
 use crate::charset::encode_char;
 use crate::link::{Frame, Kind};
 use crate::page::{COLS, Content, Flags, Packet, PageNo, page_packets, parse_cells};
@@ -210,7 +211,17 @@ pub struct Service {
     pub service_data: Option<crate::p830::ServiceData>,
     /// Set by the carousel when it wraps round to its first page.
     cycle_start: bool,
+    /// Shared Level 2.5 assets, and the pages ttxd builds from them (owner "ttxd").
+    pub assets: Assets,
+    pub gpop_page: PageNo,
+    pub gdrcs_page: PageNo,
 }
+
+/// Owner of the pages ttxd builds itself (MOT, GPOP, GDRCS).
+pub const TTXD_OWNER: &str = "ttxd";
+/// How often the MOT (with the magazine palette) and the global pages go round.
+const MOT_REPEAT_SECS: u32 = 5;
+const GLOBAL_REPEAT_SECS: u32 = 10;
 
 impl Service {
     pub fn new(service_name: &str, pages: BTreeMap<PageNo, StoredPage>) -> Self {
@@ -228,7 +239,75 @@ impl Service {
             unterminated: vec![],
             service_data: None,
             cycle_start: false,
+            assets: Assets::default(),
+            gpop_page: PageNo::new(8, 0xE8),
+            gdrcs_page: PageNo::new(8, 0xE9),
         }
+    }
+
+    /// Pages publishers may not write: magazine inventory, MOT and filler pages of
+    /// every magazine, and the global object and DRCS pages.
+    pub fn reserved(&self, no: PageNo) -> bool {
+        no.num >= 0xFD || no == self.gpop_page || no == self.gdrcs_page
+    }
+
+    /// Replace the shared assets and rebuild the pages made from them. Returns the
+    /// pages that changed (true) or went away (false).
+    pub fn set_assets(&mut self, assets: Assets) -> Vec<(PageNo, bool)> {
+        self.assets = assets;
+        self.dirty = true;
+        self.rebuild_assets()
+    }
+
+    fn asset_mags(&self) -> Vec<u8> {
+        let mut mags: Vec<u8> = self
+            .pages
+            .iter()
+            .filter(|(_, p)| p.owner != TTXD_OWNER)
+            .map(|(no, _)| no.mag)
+            .collect();
+        mags.dedup();
+        mags
+    }
+
+    fn rebuild_assets(&mut self) -> Vec<(PageNo, bool)> {
+        let old: Vec<PageNo> = self
+            .pages
+            .iter()
+            .filter(|(_, p)| p.owner == TTXD_OWNER)
+            .map(|(no, _)| *no)
+            .collect();
+        for no in &old {
+            self.pages.remove(no);
+        }
+        let mut new: Vec<(PageNo, Content, u32)> = vec![];
+        if !self.assets.is_empty() {
+            let mags = self.asset_mags();
+            for m in mags {
+                let mot = self.assets.mot(self.gpop_page, self.gdrcs_page);
+                new.push((PageNo::new(m, 0xFE), mot, MOT_REPEAT_SECS));
+            }
+            if let Some(c) = self.assets.gpop() {
+                new.push((self.gpop_page, c, GLOBAL_REPEAT_SECS));
+            }
+            if let Some(c) = self.assets.gdrcs() {
+                new.push((self.gdrcs_page, c, GLOBAL_REPEAT_SECS));
+            }
+        }
+        let now = SystemTime::now();
+        let mut changed: Vec<(PageNo, bool)> = old
+            .iter()
+            .filter(|no| !new.iter().any(|(n, _, _)| n == *no))
+            .map(|no| (*no, false))
+            .collect();
+        for (no, content, repeat) in new {
+            let mut p = StoredPage::new(TTXD_OWNER, vec![content], 10, None, now);
+            p.flags.inhibit_display = true;
+            p.repeat_secs = Some(repeat);
+            self.pages.insert(no, p);
+            changed.push((no, true));
+        }
+        changed
     }
 
     /// Set a publisher's flash budget in packets per second.
@@ -246,6 +325,14 @@ impl Service {
 
     /// Store a page (replacing it). With `flash`, also send it ahead of the carousel.
     pub fn put_page(&mut self, no: PageNo, page: StoredPage, flash: bool) {
+        let mags = self.asset_mags();
+        self.put_page_only(no, page, flash);
+        if !self.assets.is_empty() && self.asset_mags() != mags {
+            self.rebuild_assets();
+        }
+    }
+
+    fn put_page_only(&mut self, no: PageNo, page: StoredPage, flash: bool) {
         if flash {
             let unit = Unit::new(
                 Tier::Flash,
@@ -268,7 +355,12 @@ impl Service {
     pub fn delete_page(&mut self, no: PageNo) -> Option<StoredPage> {
         self.dirty = true;
         self.flashes.retain(|u| u.page != no);
-        self.pages.remove(&no)
+        let mags = self.asset_mags();
+        let gone = self.pages.remove(&no);
+        if !self.assets.is_empty() && self.asset_mags() != mags {
+            self.rebuild_assets();
+        }
+        gone
     }
 
     /// Replace some rows of a stored page and flash just those rows (no erase).
