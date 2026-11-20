@@ -10,6 +10,9 @@ op47_packets = 1
 # Wrap each OP-47 packet in an ANC Multipacket (SDID 0x03), for an encoder set to its
 # "multi-packet" OP-47 mode. A multipacket holds one 5-line SDP.
 op47_multipacket = false
+# Mark every other frame's lines as second field (descriptor bit 7 clear), so an encoder
+# that groups two 50p frames into one 625-line frame sees each line/field once.
+op47_alternate_fields = false
 # Line numbers in the OP-47 descriptors, 5 per packet. Default: 7 upwards.
 # op47_lines = [7, 8, 9, 10, 11]
 # Frames asked for ahead of the card; each is 20 ms of delay.

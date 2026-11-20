@@ -29,20 +29,25 @@ struct Ctx {
     /// Wrap each SDP in an ANC Multipacket; the first packet's VANC line (packet k is
     /// on the line after k-1, matching the shim) for its line/field word.
     multipacket: Option<u8>,
+    /// Mark every other frame's lines as second field (see `start`).
+    alternate_fields: bool,
+    second_field: bool,
 }
 
 extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
     // SAFETY: `user` is the leaked Ctx from `start`, only used from the SDK's callback thread.
     let ctx = unsafe { &mut *(user as *mut Ctx) };
     let packets = (ctx.next)();
+    let first_field = !ctx.second_field;
+    ctx.second_field = ctx.alternate_fields && !ctx.second_field;
     // Each ANC packet's user data words, preceded by their count.
     let mut all = vec![];
-    for (k, s) in op47::sdps(&packets, &ctx.lines, &mut ctx.seq)
+    for (k, s) in op47::sdps(&packets, &ctx.lines, &mut ctx.seq, first_field)
         .into_iter()
         .enumerate()
     {
         let udw = match ctx.multipacket {
-            Some(line) => op47::multipacket(&s, line + k as u8),
+            Some(line) => op47::multipacket(&s, line + k as u8, first_field),
             None => s,
         };
         all.push(udw.len() as u8);
@@ -58,11 +63,16 @@ extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
 /// descriptor lines per OP-47 packet. Packet k goes on VANC line `vanc_line + k`: encoders
 /// that check EBU line order flag several OP-47 packets on one line as duplicates. With
 /// `multipacket`, each SDP goes out wrapped in an ANC Multipacket (SDID 0x03).
+///
+/// With `alternate_fields`, frames alternate between first- and second-field line numbers.
+/// An encoder that groups two 50p frames into one 625-line frame (40 ms) otherwise sees
+/// every line twice in field 1, which EBU line-order checks flag as duplicates.
 pub fn start(
     device: &str,
     vanc_line: u32,
     lines: Vec<u8>,
     multipacket: bool,
+    alternate_fields: bool,
     next: NextFrame,
 ) -> anyhow::Result<()> {
     let sdps = lines.len() / op47::MAX_PACKETS;
@@ -76,6 +86,8 @@ pub fn start(
         lines,
         seq: 0,
         multipacket: multipacket.then_some(vanc_line as u8),
+        alternate_fields,
+        second_field: false,
     }));
     let name = CString::new(device)?;
     // SAFETY: valid C string and callback; ctx lives for the rest of the process.
