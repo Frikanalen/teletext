@@ -4,8 +4,8 @@ ttxd = "192.168.3.94:4243"
 # Without this, a 50 Hz timer stands in and nothing goes to SDI (for testing).
 decklink_device = "DeckLink Duo (2)"
 vanc_line = 9
-# OP-47 packets per frame, 1-3, 5 teletext lines each (all on vanc_line). More than 1
-# needs the encoding appliance in its multi-packet OP-47 mode.
+# OP-47 packets per frame, 1-3, 5 teletext lines each, on VANC lines vanc_line,
+# vanc_line + 1, ... More than 1 needs the encoding appliance in its multi-packet mode.
 op47_packets = 1
 # Wrap each OP-47 packet in an ANC Multipacket (SDID 0x03), for an encoder set to its
 # "multi-packet" OP-47 mode. A multipacket holds one 5-line SDP.

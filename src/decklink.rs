@@ -26,7 +26,8 @@ struct Ctx {
     next: NextFrame,
     lines: Vec<u8>,
     seq: u16,
-    /// Wrap each SDP in an ANC Multipacket; the VANC line for its line/field word.
+    /// Wrap each SDP in an ANC Multipacket; the first packet's VANC line (packet k is
+    /// on the line after k-1, matching the shim) for its line/field word.
     multipacket: Option<u8>,
 }
 
@@ -36,9 +37,12 @@ extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
     let packets = (ctx.next)();
     // Each ANC packet's user data words, preceded by their count.
     let mut all = vec![];
-    for s in op47::sdps(&packets, &ctx.lines, &mut ctx.seq) {
+    for (k, s) in op47::sdps(&packets, &ctx.lines, &mut ctx.seq)
+        .into_iter()
+        .enumerate()
+    {
         let udw = match ctx.multipacket {
-            Some(line) => op47::multipacket(&s, line),
+            Some(line) => op47::multipacket(&s, line + k as u8),
             None => s,
         };
         all.push(udw.len() as u8);
@@ -51,7 +55,8 @@ extern "C" fn fill(user: *mut c_void, buf: *mut u8, cap: usize) -> usize {
 }
 
 /// Start playback on the named device. Runs until the process exits. `lines` holds 5
-/// descriptor lines per OP-47 packet; all packets go on `vanc_line`. With
+/// descriptor lines per OP-47 packet. Packet k goes on VANC line `vanc_line + k`: encoders
+/// that check EBU line order flag several OP-47 packets on one line as duplicates. With
 /// `multipacket`, each SDP goes out wrapped in an ANC Multipacket (SDID 0x03).
 pub fn start(
     device: &str,
