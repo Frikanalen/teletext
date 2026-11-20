@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/Frikanalen/teletext/compare/v0.6.0...v0.7.0) (2026-11-20)
+
+
+### Features
+
+* ttx-inject op47_alternate_fields marks every other frame as field 2 ([#36](https://github.com/Frikanalen/teletext/issues/36)) ([687ab56](https://github.com/Frikanalen/teletext/commit/687ab564d0fe7a1382b27f829d769804607c2bdc))
+
 ## [0.6.0](https://github.com/Frikanalen/teletext/compare/v0.5.0...v0.6.0) (2026-11-20)
 
 
