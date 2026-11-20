@@ -1,7 +1,7 @@
 // Thin C ABI over the Blackmagic Desktop Video SDK for ttxd.
 //
 // Plays a constant black 720p50 picture by scheduled playback and attaches one to three
-// ANC packets (OP-47 SDPs, on the same VANC line) to every frame through
+// ANC packets (OP-47 SDPs, one per VANC line from `line` down) to every frame through
 // IDeckLinkVideoFrameAncillaryPackets. The SDK
 // builds the SMPTE 291 packet (ADF, DID/SDID/DC, parity, checksum) from the user data words.
 // Each completed frame calls back into Rust for the next frame's packet, so the output
@@ -176,7 +176,7 @@ int ttx_decklink_start(const char* device, uint8_t did, uint8_t sdid, uint32_t l
             vb->Release();
         }
         if (s.frame->QueryInterface(IID_IDeckLinkVideoFrameAncillaryPackets, (void**)&s.anc) != S_OK) return -7;
-        for (uint32_t k = 0; k < packets_per_frame; k++) s.packets.push_back(new AncPacket(did, sdid, line));
+        for (uint32_t k = 0; k < packets_per_frame; k++) s.packets.push_back(new AncPacket(did, sdid, line + k));
         o->slots.push_back(s);
     }
     for (auto& s : o->slots)
