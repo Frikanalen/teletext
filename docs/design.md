@@ -36,6 +36,11 @@ is 9 TS packets per 40 ms: a PES of 35 lines, a full 625-line VBI. 3 SDPs (15 li
 20 ms, a PES of exactly 4 TS packets) fit inside it; 4 would not. A page is about 25
 packets, so about 10 pages/s per SDP.
 
+The appliance thinks in 625-line frames: 40 ms, two fields. With every 50p frame claiming
+field 1 lines 7-21, each 40 ms holds every line twice, and the appliance raises "Input not
+compliant for EBU: duplicated or out of order OP-47 VANC packets" (our best reading; not yet
+confirmed). `op47_alternate_fields` marks every other frame as second field instead.
+
 ## Split: ttxd and ttx-inject
 
 ttxd runs in Kubernetes. On sdi-test1 there is only ttx-inject, a small program that

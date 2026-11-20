@@ -38,6 +38,11 @@ struct Config {
     #[serde(default)]
     #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
     op47_multipacket: bool,
+    /// Alternate frames between first- and second-field line numbers, so an encoder that
+    /// groups two 50p frames into one 625-line frame sees each line/field once.
+    #[serde(default)]
+    #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
+    op47_alternate_fields: bool,
     /// Line numbers put in the OP-47 descriptors, 5 per packet. Defaults to 7 upwards.
     #[serde(default)]
     #[cfg_attr(not(feature = "decklink"), allow(dead_code))]
@@ -333,14 +338,20 @@ fn main() -> anyhow::Result<()> {
                 cfg.vanc_line,
                 op47_lines,
                 cfg.op47_multipacket,
+                cfg.op47_alternate_fields,
                 Box::new(move || out.next()),
             )?;
             tracing::info!(
-                "OP-47 on {dev:?}, VANC line {}, {} packet(s) per frame{}",
+                "OP-47 on {dev:?}, VANC line {}, {} packet(s) per frame{}{}",
                 cfg.vanc_line,
                 cfg.op47_packets,
                 if cfg.op47_multipacket {
                     ", as multipackets"
+                } else {
+                    ""
+                },
+                if cfg.op47_alternate_fields {
+                    ", alternating fields"
                 } else {
                     ""
                 }
